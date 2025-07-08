@@ -59,6 +59,7 @@ enum {
 	IOMMUFD_CMD_HW_QUEUE_ALLOC = 0x94,
 	IOMMUFD_CMD_IOAS_NOIOMMU_GET_PA = 0x95,
 	IOMMUFD_CMD_HWPT_LIVEUPDATE_MARK_PRESERVE = 0x96,
+	IOMMUFD_CMD_HWPT_LIVEUPDATE_RESTORE = 0x97,
 };
 
 /**
@@ -1417,4 +1418,22 @@ struct iommu_hwpt_liveupdate_mark_preserve {
 #define IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE \
 	_IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_LIVEUPDATE_MARK_PRESERVE)
 
+/**
+ * struct iommu_hwpt_liveupdate_restore - ioctl(IOMMU_HWPT_LIVEUPDATE_RESTORE)
+ * @size: sizeof(struct iommu_hwpt_liveupdate_restore)
+ * @pt_id: Output the ID of the recreated HWPT.
+ * @hwpt_token: Token to identify this hwpt
+ * @hwpt_alloc_flags: Combination of enum iommufd_hwpt_alloc_flags
+
+ * An immutable HWPT is restored without a parent IOAS, and the ID
+ * of this new HWPT is returned.
+ */
+
+struct iommu_hwpt_liveupdate_restore {
+	__u32 size;
+	__u32 pt_id;
+	__u32 hwpt_token;
+	__u32 hwpt_alloc_flags;
+};
+#define IOMMU_HWPT_LIVEUPDATE_RESTORE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_LIVEUPDATE_RESTORE)
 #endif
