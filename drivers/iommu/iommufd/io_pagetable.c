@@ -30,6 +30,19 @@ struct iopt_pages_list {
 	unsigned long length;
 };
 
+static inline bool iopt_liveupdate_immutable(const struct io_pagetable *iopt)
+{
+	bool immutable = false;
+
+	lockdep_assert_held(&iopt->domains_rwsem);
+
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	/* iopt becomes immutable once liveupdate preservation starts */
+	immutable = iopt->num_preserved_domains;
+#endif
+	return immutable;
+}
+
 struct iopt_area *iopt_area_contig_init(struct iopt_area_contig_iter *iter,
 					struct io_pagetable *iopt,
 					unsigned long iova,
@@ -384,6 +397,11 @@ int iopt_map_pages(struct io_pagetable *iopt, struct list_head *pages_list,
 		return rc;
 
 	down_read(&iopt->domains_rwsem);
+	if (iopt_liveupdate_immutable(iopt)) {
+		rc = -EBUSY;
+		goto out_unlock_domains;
+	}
+
 	rc = iopt_fill_domains_pages(pages_list);
 	if (rc)
 		goto out_unlock_domains;
@@ -755,6 +773,12 @@ static int iopt_unmap_iova_range(struct io_pagetable *iopt, unsigned long start,
 again:
 	down_read(&iopt->domains_rwsem);
 	down_write(&iopt->iova_rwsem);
+
+	if (iopt_liveupdate_immutable(iopt)) {
+		rc = -EBUSY;
+		goto out_unlock_iova;
+	}
+
 	while ((area = iopt_area_iter_first(iopt, start, last))) {
 		unsigned long area_last = iopt_area_last_iova(area);
 		unsigned long area_first = iopt_area_iova(area);
