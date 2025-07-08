@@ -2,6 +2,7 @@
 
 #define pr_fmt(fmt) "iommufd: " fmt
 
+#include <linux/anon_inodes.h>
 #include <linux/file.h>
 #include <linux/iommufd.h>
 #include <linux/kexec_handover.h>
@@ -287,12 +288,64 @@ static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 
 static int iommufd_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
-	return -EOPNOTSUPP;
+	struct iommufd_lu *iommufd_lu;
+	struct iommufd_ctx *ictx;
+	struct folio *folio_lu;
+	struct file *file;
+	int rc;
+
+	folio_lu = kho_restore_folio(args->serialized_data);
+	if (IS_ERR_OR_NULL(folio_lu))
+		return -EFAULT;
+
+	iommufd_lu = folio_address(folio_lu);
+
+	file = anon_inode_create_getfile("iommufd", &iommufd_fops,
+					 NULL, O_RDWR, NULL);
+	if (IS_ERR(file)) {
+		rc = PTR_ERR(file);
+		goto err_folio_put;
+	}
+
+	rc = iommufd_fops.open(file->f_inode, file);
+	if (rc)
+		goto err_fput;
+
+	ictx = iommufd_ctx_from_file(file);
+	if (WARN_ON(IS_ERR(ictx))) {
+		rc = PTR_ERR(ictx);
+		goto err_fput;
+	}
+
+	if (WARN_ON(ictx->lu)) {
+		rc = -EEXIST;
+		goto err_ctx_put;
+	}
+	ictx->lu = iommufd_lu;
+
+	iommufd_ctx_put(ictx);
+
+	args->file = file;
+
+	return 0;
+
+err_ctx_put:
+	iommufd_ctx_put(ictx);
+err_fput:
+	fput(file);
+err_folio_put:
+	folio_put(folio_lu);
+	return rc;
 }
 
 static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
-	return false;
+	if (!args->retrieved || !args->file) {
+		pr_warn("%s: fd not reclaimed\n", __func__);
+		return false;
+	}
+
+	return true;
 }
 
 static void iommufd_liveupdate_finish(struct liveupdate_file_op_args *args)
