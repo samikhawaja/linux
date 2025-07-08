@@ -1350,8 +1350,8 @@ struct iommu_hw_queue_alloc {
 #define IOMMU_HW_QUEUE_ALLOC _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HW_QUEUE_ALLOC)
 
 /**
- * struct iommu_hwpt_lu_mark_preserve - ioctl(IOMMU_HWPT_LU_MARK_PRESERVE)
- * @size: sizeof(struct iommu_hwpt_lu_mark_preserve)
+ * struct iommu_hwpt_liveupdate_mark_preserve - ioctl(IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE)
+ * @size: sizeof(struct iommu_hwpt_liveupdate_mark_preserve)
  * @hwpt_id: Iommufd object ID of the target HWPT
  * @hwpt_token: Token to identify this hwpt upon restore
  *
@@ -1363,10 +1363,11 @@ struct iommu_hw_queue_alloc {
  * Note: There is no 'unmark' operation, so any HWPTs pooled in userspace that
  * are marked for preservation must be destroyed after use.
  */
-struct iommu_hwpt_lu_mark_preserve {
+struct iommu_hwpt_liveupdate_mark_preserve {
 	__u32 size;
 	__u32 hwpt_id;
 	__u64 hwpt_token;
 };
-#define IOMMU_HWPT_LU_MARK_PRESERVE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_LU_MARK_PRESERVE)
+#define IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_LU_MARK_PRESERVE)
+
 #endif
