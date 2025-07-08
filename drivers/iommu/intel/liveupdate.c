@@ -599,6 +599,9 @@ void intel_iommu_unpreserve_device(struct device *dev,
 	if (!sm_supported(info->iommu))
 		return;
 
+	if (!device_ser->intel.pasid_table)
+		return;
+
 	pasid_table = intel_pasid_get_table(dev);
 	if (!pasid_table)
 		return;
