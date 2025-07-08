@@ -21,6 +21,9 @@ struct iommu_option;
 struct iommufd_device;
 struct dma_buf_attachment;
 struct dma_buf_phys_vec;
+struct iommufd_lu;
+
+extern const struct file_operations iommufd_fops;
 
 struct iommufd_sw_msi_map {
 	struct list_head sw_msi_item;
@@ -57,6 +60,10 @@ struct iommufd_ctx {
 	/* Compatibility with VFIO no iommu */
 	u8 no_iommu_mode;
 	struct iommufd_ioas *vfio_ioas;
+
+#ifdef CONFIG_LIVEUPDATE
+	struct iommufd_lu *lu;
+#endif
 };
 
 /* Entry for iommufd_ctx::mt_mmap */
@@ -712,6 +719,11 @@ iommufd_get_vdevice(struct iommufd_ctx *ictx, u32 id)
 }
 
 #ifdef CONFIG_LIVEUPDATE
+struct iommufd_lu {
+	/* Only valid in restore, for lifetime purposes */
+	struct folio *folio_lu;
+};
+
 int iommufd_liveupdate_register_lufs(void);
 int iommufd_liveupdate_unregister_lufs(void);
 #else
