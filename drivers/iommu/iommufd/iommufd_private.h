@@ -21,6 +21,8 @@ struct iommu_option;
 struct iommufd_device;
 struct dma_buf_attachment;
 
+extern const struct file_operations iommufd_fops;
+
 struct iommufd_sw_msi_map {
 	struct list_head sw_msi_item;
 	phys_addr_t sw_msi_start;
@@ -48,6 +50,7 @@ struct iommufd_ctx {
 #define IOMMUFD_OBJ_LIVEUPDATE_MARK XA_MARK_1
 	/* @liveupdate_mutex: Protects the preservation of HWPTs. */
 	struct mutex liveupdate_mutex;
+	struct iommufd_lu *lu;
 #endif
 	wait_queue_head_t destroy_wait;
 	struct rw_semaphore ioas_creation_lock;
