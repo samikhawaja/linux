@@ -21,6 +21,8 @@ struct iommu_option;
 struct iommufd_device;
 struct dma_buf_attachment;
 
+extern const struct file_operations iommufd_fops;
+
 struct iommufd_sw_msi_map {
 	struct list_head sw_msi_item;
 	phys_addr_t sw_msi_start;
@@ -48,6 +50,9 @@ struct iommufd_ctx {
 #define IOMMUFD_OBJ_LIVEUPDATE_MARK XA_MARK_1
 	/* @liveupdate_mutex: Protects the preservation of HWPTs. */
 	struct mutex liveupdate_mutex;
+	struct iommufd_ser *serialized_data;
+	/* Bitmap of the preserved HWPTs that were restored */
+	unsigned long *hwpts_restored;
 #endif
 	wait_queue_head_t destroy_wait;
 	struct rw_semaphore ioas_creation_lock;
@@ -402,6 +407,7 @@ struct iommufd_hwpt_paging {
 	bool nest_parent : 1;
 #ifdef CONFIG_IOMMU_LIVEUPDATE
 	bool liveupdate_preserved;
+	bool liveupdate_restored;
 	u64 liveupdate_token;
 #endif
 	/* Head at iommufd_ioas::hwpt_list */
@@ -753,6 +759,8 @@ int iommufd_liveupdate_register(void);
 void iommufd_liveupdate_unregister(void);
 
 int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd);
+
+int iommufd_hwpt_liveupdate_restore(struct iommufd_ucmd *ucmd);
 #else
 static inline int iommufd_liveupdate_register(void)
 {
@@ -764,6 +772,11 @@ static inline void iommufd_liveupdate_unregister(void)
 }
 
 static inline int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
+{
+	return -ENOTTY;
+}
+
+static inline int iommufd_hwpt_liveupdate_restore(struct iommufd_ucmd *ucmd)
 {
 	return -ENOTTY;
 }

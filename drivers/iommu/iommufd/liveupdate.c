@@ -7,6 +7,7 @@
 
 #define pr_fmt(fmt) "iommufd: " fmt
 
+#include <linux/anon_inodes.h>
 #include <linux/file.h>
 #include <linux/iommufd.h>
 #include <linux/kexec_handover.h>
@@ -354,16 +355,163 @@ static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 
 static int iommufd_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
-	return -EOPNOTSUPP;
+	struct iommufd_ser *iommufd_ser;
+	unsigned long *hwpts_restored;
+	struct iommufd_ctx *ictx;
+	struct file *file;
+	int rc;
+
+	iommufd_ser = phys_to_virt(args->serialized_data);
+
+	hwpts_restored = bitmap_zalloc(iommufd_ser->num_hwpts, GFP_KERNEL);
+	if (!hwpts_restored)
+		return -ENOMEM;
+
+	file = anon_inode_create_getfile("iommufd", &iommufd_fops,
+					 NULL, O_RDWR, NULL);
+	if (IS_ERR(file)) {
+		rc = PTR_ERR(file);
+		goto err_free_bitmap;
+	}
+
+	rc = iommufd_fops.open(file->f_inode, file);
+	if (rc)
+		goto err_fput;
+
+	ictx = iommufd_ctx_from_file(file);
+	if (WARN_ON(IS_ERR(ictx))) {
+		rc = PTR_ERR(ictx);
+		goto err_fput;
+	}
+
+	if (WARN_ON(ictx->serialized_data)) {
+		rc = -EEXIST;
+		goto err_ctx_put;
+	}
+	ictx->serialized_data = iommufd_ser;
+	ictx->hwpts_restored = hwpts_restored;
+
+	iommufd_ctx_put(ictx);
+
+	args->file = file;
+
+	return 0;
+
+err_ctx_put:
+	iommufd_ctx_put(ictx);
+err_fput:
+	fput(file);
+err_free_bitmap:
+	bitmap_free(hwpts_restored);
+	return rc;
+}
+
+int iommufd_hwpt_liveupdate_restore(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_hwpt_liveupdate_restore *cmd = ucmd->cmd;
+	struct iommufd_hwpt_paging *hwpt = NULL;
+	struct iommufd_ctx *ictx = ucmd->ictx;
+	struct iommu_domain_ser *domain_ser;
+	struct iommufd_hwpt_ser *hwpt_ser;
+	struct iommufd_ser *iommufd_ser;
+	struct iommu_domain *domain;
+	unsigned int i;
+	int rc;
+
+	iommufd_ser = ictx->serialized_data;
+	if (!iommufd_ser)
+		return -ENOTTY;
+
+	if (cmd->__reserved)
+		return -EOPNOTSUPP;
+
+	for (i = 0; i < iommufd_ser->num_hwpts; i++) {
+		hwpt_ser = &iommufd_ser->hwpt_array[i];
+
+		if (test_bit(i, ictx->hwpts_restored))
+			continue;
+
+		if (hwpt_ser->token == cmd->hwpt_token)
+			goto hwpt_found;
+	}
+
+	return -ENOENT;
+
+hwpt_found:
+	hwpt = _iommufd_hwpt_paging_alloc(ictx);
+	if (IS_ERR(hwpt))
+		return PTR_ERR(hwpt);
+
+	domain_ser = phys_to_virt(hwpt_ser->domain_ser_phys);
+	domain = domain_ser->restored_domain;
+	if (!domain) {
+		rc = -ENOENT;
+		goto err_destroy;
+	}
+
+	iommufd_hwpt_init_from_domain(&hwpt->common, domain);
+	iommufd_object_finalize(ictx, &hwpt->common.obj);
+
+	set_bit(i, ictx->hwpts_restored);
+	hwpt->liveupdate_restored = true;
+	cmd->pt_id = hwpt->common.obj.id;
+	return 0;
+
+err_destroy:
+	iommufd_object_abort_and_destroy(ictx, &hwpt->common.obj);
+	return rc;
 }
 
 static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
-	return false;
+	struct iommufd_hwpt_paging *hwpt;
+	struct iommufd_ser *iommufd_lu;
+	struct iommufd_object *obj;
+	struct iommufd_ctx *ictx;
+	unsigned long index;
+
+	if (!args->retrieve_status || !args->file) {
+		pr_warn("%s: fd not reclaimed\n", __func__);
+		return false;
+	}
+
+	ictx = iommufd_ctx_from_file(args->file);
+	iommufd_lu = ictx->serialized_data;
+
+	if (!bitmap_full(ictx->hwpts_restored, iommufd_lu->num_hwpts))
+		return false;
+
+	xa_lock(&ictx->objects);
+	xa_for_each(&ictx->objects, index, obj) {
+		if (obj->type != IOMMUFD_OBJ_HWPT_PAGING)
+			continue;
+
+		hwpt = container_of(obj, struct iommufd_hwpt_paging, common.obj);
+		if (!hwpt->liveupdate_restored)
+			continue;
+
+		if (!hwpt->common.domain || iommu_domain_has_attachments(hwpt->common.domain)) {
+			xa_unlock(&ictx->objects);
+			return false;
+		}
+	}
+	xa_unlock(&ictx->objects);
+
+	return true;
 }
 
 static void iommufd_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
+	struct iommufd_ser *iommufd_ser;
+	struct iommufd_ctx *ictx;
+
+	ictx = iommufd_ctx_from_file(args->file);
+	iommufd_ser = ictx->serialized_data;
+	ictx->serialized_data = NULL;
+	bitmap_free(ictx->hwpts_restored);
+	ictx->hwpts_restored = NULL;
+	kho_restore_free(iommufd_ser);
+	iommufd_ctx_put(ictx);
 }
 
 static bool iommufd_liveupdate_can_preserve(struct liveupdate_file_handler *handler,
