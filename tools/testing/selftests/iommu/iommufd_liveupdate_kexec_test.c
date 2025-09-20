@@ -215,6 +215,10 @@ static void before_kexec(int luo_fd)
 static void after_kexec(int luo_fd, int state_session_fd)
 {
 	int iommufd, cdev_fd, session, stage;
+	struct vfio_device_bind_iommufd bind = {
+		.argsz = sizeof(bind),
+		.flags = 0,
+	};
 
 	restore_and_read_stage(state_session_fd, STATE_TOKEN, &stage);
 	ksft_assert(stage == 2);
@@ -223,18 +227,59 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	if (session < 0)
 		fail_exit("luo_retrieve_session failed");
 
-	iommufd = luo_session_retrieve_fd(session, IOMMUFD_TOKEN);
-	if (iommufd >= 0)
-		fail_exit("iommufd should not be retrievable yet");
+	cdev_fd = test_luo_session_retrieve_fd(session, CDEV_TOKEN);
 
-	/* The cdev can only be retrieved together with its iommufd. */
-	cdev_fd = luo_session_retrieve_fd(session, CDEV_TOKEN);
-	if (cdev_fd >= 0)
-		fail_exit("cdev should not be retrievable without its iommufd");
+	/*
+	 * The cdev was retrieved together with its preserved iommufd, and it
+	 * can only be bound to that iommufd.
+	 */
+	iommufd = test_luo_session_retrieve_fd(session, IOMMUFD_TOKEN);
+
+	struct iommu_ioas_alloc alloc_data  = {
+		.size = sizeof(alloc_data),
+		.flags = 0,
+	};
+	struct iommu_hwpt_alloc hwpt_alloc = {
+		.size = sizeof(hwpt_alloc),
+		.flags = 0,
+	};
+	struct iommu_hwpt_liveupdate_restore restore = {
+		.size = sizeof(restore),
+		.hwpt_token = HWPT_TOKEN,
+		.hwpt_alloc_flags = 0,
+	};
+	struct vfio_device_attach_iommufd_pt attach_data = {
+		.argsz = sizeof(attach_data),
+		.flags = 0,
+	};
+
+	bind.iommufd = iommufd;
+	test_ioctl(cdev_fd, VFIO_DEVICE_BIND_IOMMUFD, &bind);
+
+	test_ioctl(iommufd, IOMMU_IOAS_ALLOC, &alloc_data);
+
+	test_ioctl(iommufd, IOMMU_HWPT_LIVEUPDATE_RESTORE, &restore);
 
 	/* Should fail */
 	if (luo_session_finish(session) == 0)
-		fail_exit("luo_session_finish should fail if iommufd is not restored");
+		fail_exit("luo_session_finish should fail before final attach");
+
+	hwpt_alloc.dev_id = bind.out_devid;
+	hwpt_alloc.pt_id = alloc_data.out_ioas_id;
+	test_ioctl(iommufd, IOMMU_HWPT_ALLOC, &hwpt_alloc);
+
+	attach_data.pt_id = hwpt_alloc.out_hwpt_id;
+	test_ioctl(cdev_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &attach_data);
+
+	attach_data.pt_id = alloc_data.out_ioas_id;
+	test_ioctl(cdev_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &attach_data);
+
+	/* The restored domain was replaced, so the session can finish now. */
+	if (luo_session_finish(session))
+		fail_exit("luo_session_finish failed after the final attach");
+
+	close(iommufd);
+	close(cdev_fd);
 }
 
 int main(int argc, char *argv[])
