@@ -214,13 +214,43 @@ static void after_kexec(int luo_fd, int state_session_fd)
 
 	iommufd = open_iommufd();
 
+	struct iommu_ioas_alloc alloc_data  = {
+		.size = sizeof(alloc_data),
+		.flags = 0,
+	};
+	struct iommu_hwpt_alloc hwpt_alloc = {
+		.size = sizeof(hwpt_alloc),
+		.flags = 0,
+	};
+	struct iommu_hwpt_liveupdate_restore restore = {
+		.size = sizeof(restore),
+		.hwpt_token = HWPT_TOKEN,
+		.hwpt_alloc_flags = 0,
+	};
+	struct vfio_device_attach_iommufd_pt attach_data = {
+		.argsz = sizeof(attach_data),
+		.flags = 0,
+	};
+
 	bind.iommufd = iommufd;
-	if (ioctl(cdev_fd, VFIO_DEVICE_BIND_IOMMUFD, &bind) == 0 || errno != EPERM)
-		fail_exit("Binding cdev to new iommufd should fail with EPERM");
+	test_ioctl(cdev_fd, VFIO_DEVICE_BIND_IOMMUFD, &bind);
+
+	test_ioctl(iommufd, IOMMU_IOAS_ALLOC, &alloc_data);
+
+	test_ioctl(iommufd, IOMMU_HWPT_LIVEUPDATE_RESTORE, &restore);
 
 	/* Should fail */
 	if (luo_session_finish(session) == 0)
-		fail_exit("luo_session_finish should fail if iommufd is not restored");
+		fail_exit("luo_session_finish should fail before final attach");
+
+	hwpt_alloc.pt_id = alloc_data.out_ioas_id;
+	test_ioctl(iommufd, IOMMU_HWPT_ALLOC, &hwpt_alloc);
+
+	attach_data.pt_id = hwpt_alloc.out_hwpt_id;
+	test_ioctl(cdev_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &attach_data);
+
+	attach_data.pt_id = alloc_data.out_ioas_id;
+	test_ioctl(cdev_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &attach_data);
 
 	close(iommufd);
 	close(cdev_fd);
