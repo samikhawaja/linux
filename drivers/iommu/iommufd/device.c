@@ -1778,17 +1778,12 @@ static bool _iommufd_device_has_pasid_attachments(struct iommufd_device *idev)
 	return false;
 }
 
-/**
- * iommufd_device_preserve() - Preserve an iommufd device across live update
- * @s: Live update session
- * @idev: Target iommufd device
- * @iommufd_tokenp: Pointer to store outgoing iommufd token
- *
- * Return: 0 on success, or negative error code.
+/*
+ * Preserve @idev with @token as its DMA owner token. The selftest calls this
+ * directly, as it preserves a device without a file of its own in the live
+ * update session.
  */
-int iommufd_device_preserve(struct liveupdate_session *s,
-			    struct iommufd_device *idev,
-			    u64 *iommufd_tokenp)
+int __iommufd_device_preserve(struct iommufd_device *idev, u64 token)
 {
 	struct iommufd_hwpt_paging *hwpt_paging;
 	struct iommufd_hw_pagetable *hwpt;
@@ -1832,10 +1827,6 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 	}
 
 	hwpt_paging = to_hwpt_paging(hwpt);
-	ret = liveupdate_get_token_outgoing(s, idev->ictx->file, iommufd_tokenp);
-	if (ret)
-		goto out;
-
 	if (!hwpt_paging->liveupdate_preserved) {
 		ret = -EINVAL;
 		goto out;
@@ -1843,13 +1834,44 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 
 	ret = iommu_preserve_device(hwpt_paging->common.domain,
 				    idev->dev,
-				    *iommufd_tokenp);
+				    token);
 
 	if (!ret)
 		idev->liveupdate_preserved = true;
 out:
 	mutex_unlock(&igroup->lock);
 	return ret;
+}
+
+/**
+ * iommufd_device_preserve() - Preserve an iommufd device across live update
+ * @s: Live update session
+ * @idev: Target iommufd device
+ * @iommufd_tokenp: Pointer to store outgoing iommufd token
+ *
+ * Return: 0 on success, or negative error code.
+ */
+int iommufd_device_preserve(struct liveupdate_session *s,
+			    struct iommufd_device *idev,
+			    u64 *iommufd_tokenp)
+{
+	int ret;
+
+	if (!idev)
+		return -EINVAL;
+
+	if (iommufd_device_is_noiommu(idev))
+		return -EOPNOTSUPP;
+
+	/*
+	 * The iommufd must be preserved in the same session, which also makes
+	 * sure its HWPT preservation is done before the device is preserved.
+	 */
+	ret = liveupdate_get_token_outgoing(s, idev->ictx->file, iommufd_tokenp);
+	if (ret)
+		return ret;
+
+	return __iommufd_device_preserve(idev, *iommufd_tokenp);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_preserve, "IOMMUFD");
 

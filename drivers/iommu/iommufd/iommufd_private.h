@@ -749,6 +749,7 @@ int iommufd_liveupdate_register(void);
 void iommufd_liveupdate_unregister(void);
 
 int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd);
+int __iommufd_device_preserve(struct iommufd_device *idev, u64 token);
 #else
 static inline int iommufd_liveupdate_register(void)
 {

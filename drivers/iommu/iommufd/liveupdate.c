@@ -210,12 +210,41 @@ err:
 	return rc;
 }
 
+/*
+ * Devices preserved by the selftest have no file of their own in the live
+ * update session, so unpreserve them before their domains are unpreserved.
+ */
+static void iommufd_unpreserve_devices(struct iommufd_ctx *ictx)
+{
+	struct iommufd_device *idev;
+	struct iommufd_object *obj;
+	unsigned long index;
+
+	xa_lock(&ictx->objects);
+	xa_for_each(&ictx->objects, index, obj) {
+		if (obj->type != IOMMUFD_OBJ_DEVICE)
+			continue;
+
+		idev = container_of(obj, struct iommufd_device, obj);
+		if (!iommufd_device_is_preserved(idev) || !iommufd_lock_obj(obj))
+			continue;
+
+		xa_unlock(&ictx->objects);
+		iommufd_device_unpreserve(idev);
+		iommufd_put_object(ictx, obj);
+		xa_lock(&ictx->objects);
+	}
+	xa_unlock(&ictx->objects);
+}
+
 static void _iommufd_unpreserve(struct iommufd_ctx *ictx,
 				struct iommufd_ser *ser)
 {
 	struct iommufd_hwpt_paging *hwpt;
 	struct iommufd_object *obj;
 	unsigned long index;
+
+	iommufd_unpreserve_devices(ictx);
 
 	xa_lock(&ictx->objects);
 	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
