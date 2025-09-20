@@ -2115,6 +2115,34 @@ err_put:
 	return rc;
 }
 
+/*
+ * Preserve the IOMMU state of a device bound to this iommufd, as a vfio cdev
+ * preserved in the same live update session would. The iommufd must already
+ * be preserved, so the HWPT of the device is preserved.
+ */
+static int iommufd_test_liveupdate_preserve_dev(struct iommufd_ucmd *ucmd,
+						u32 dev_id)
+{
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	struct iommufd_device *idev;
+	u64 token = 0;
+	int rc;
+
+	idev = iommufd_get_device(ucmd, dev_id);
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+
+	mutex_lock(&ucmd->ictx->liveupdate_mutex);
+	rc = __iommufd_device_preserve(NULL, idev, &token);
+	mutex_unlock(&ucmd->ictx->liveupdate_mutex);
+
+	iommufd_put_object(ucmd->ictx, &idev->obj);
+	return rc;
+#else
+	return -EOPNOTSUPP;
+#endif
+}
+
 int iommufd_test(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_test_cmd *cmd = ucmd->cmd;
@@ -2200,6 +2228,8 @@ int iommufd_test(struct iommufd_ucmd *ucmd)
 		return iommufd_test_dmabuf_revoke(ucmd,
 						  cmd->dmabuf_revoke.dmabuf_fd,
 						  cmd->dmabuf_revoke.revoked);
+	case IOMMU_TEST_OP_LIVEUPDATE_PRESERVE_DEV:
+		return iommufd_test_liveupdate_preserve_dev(ucmd, cmd->id);
 	default:
 		return -EOPNOTSUPP;
 	}

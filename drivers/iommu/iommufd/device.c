@@ -1778,17 +1778,14 @@ static bool _iommufd_device_has_pasid_attachments(struct iommufd_device *idev)
 	return false;
 }
 
-/**
- * iommufd_device_preserve() - Preserve an iommufd device across live update
- * @s: Live update session
- * @idev: Target iommufd device
- * @iommufd_tokenp: Pointer to store outgoing iommufd token
- *
- * Return: 0 on success, or negative error code.
+/*
+ * When @s is NULL the caller provides the token in @iommufd_tokenp. This is
+ * only done by the selftest, which preserves a device without a file of its
+ * own in the live update session.
  */
-int iommufd_device_preserve(struct liveupdate_session *s,
-			    struct iommufd_device *idev,
-			    u64 *iommufd_tokenp)
+int __iommufd_device_preserve(struct liveupdate_session *s,
+			      struct iommufd_device *idev,
+			      u64 *iommufd_tokenp)
 {
 	struct iommufd_hwpt_paging *hwpt_paging;
 	struct iommufd_hw_pagetable *hwpt;
@@ -1832,9 +1829,12 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 	}
 
 	hwpt_paging = to_hwpt_paging(hwpt);
-	ret = liveupdate_get_token_outgoing(s, idev->ictx->file, iommufd_tokenp);
-	if (ret)
-		goto out;
+	if (s) {
+		ret = liveupdate_get_token_outgoing(s, idev->ictx->file,
+						    iommufd_tokenp);
+		if (ret)
+			goto out;
+	}
 
 	if (!hwpt_paging->liveupdate_preserved) {
 		ret = -EINVAL;
@@ -1850,6 +1850,21 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 out:
 	mutex_unlock(&igroup->lock);
 	return ret;
+}
+
+/**
+ * iommufd_device_preserve() - Preserve an iommufd device across live update
+ * @s: Live update session
+ * @idev: Target iommufd device
+ * @iommufd_tokenp: Pointer to store outgoing iommufd token
+ *
+ * Return: 0 on success, or negative error code.
+ */
+int iommufd_device_preserve(struct liveupdate_session *s,
+			    struct iommufd_device *idev,
+			    u64 *iommufd_tokenp)
+{
+	return __iommufd_device_preserve(s, idev, iommufd_tokenp);
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_preserve, "IOMMUFD");
 
