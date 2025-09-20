@@ -6,6 +6,7 @@ LDLIBS += -lcap
 TEST_GEN_PROGS :=
 TEST_GEN_PROGS += iommufd
 TEST_GEN_PROGS += iommufd_fail_nth
+TEST_GEN_PROGS += iommufd_liveupdate
 
 TEST_GEN_PROGS_EXTENDED += iommufd_liveupdate_kexec_test
 
