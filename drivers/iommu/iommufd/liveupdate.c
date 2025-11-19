@@ -88,7 +88,6 @@ static int iommufd_save_devices(struct iommufd_ctx *ictx,
 
 	xa_init(&seen_hwpts);
 
-	xa_lock(&ictx->objects);
 	xa_for_each(&ictx->objects, index_device, obj) {
 		if (obj->type != IOMMUFD_OBJ_DEVICE)
 			continue;
@@ -163,7 +162,6 @@ static int iommufd_save_devices(struct iommufd_ctx *ictx,
 		rc = -EFAULT;
 
 out:
-	xa_unlock(&ictx->objects);
 	xa_destroy(&seen_hwpts);
 	return rc;
 }
