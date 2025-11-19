@@ -306,6 +306,9 @@ int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu, void *i
 	struct iommu_unit_ser *iser = iommu_ser;
 	int ret;
 
+	if (!iommu_ser)
+		return -ENOENT;
+
 	iommu->root_entry = __va(iser->root_table);
 
 	ret = restore_iommu_context(iommu);
