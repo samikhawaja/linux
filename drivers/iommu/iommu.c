@@ -2100,20 +2100,14 @@ EXPORT_SYMBOL_GPL(iommu_paging_domain_alloc_flags);
 
 struct iommu_ser {
 	u64 nr_domains;
-	union {
-		u64 domains_ser_phys;
-		struct iommu_domain_ser *domains_ser;
-	};
+	u64 domains_ser_phys;
+	struct iommu_domain_ser *domains_ser;
 	u64 nr_devices;
-	union {
-		u64 devices_ser_phys;
-		struct device_ser *devices_ser;
-	};
+	u64 devices_ser_phys;
+	struct device_ser *devices_ser;
 	u64 nr_iommu_devices;
-	union {
-		u64 iommu_devices_ser_phys;
-		struct iommu_device_ser *iommu_devices_ser;
-	};
+	u64 iommu_devices_ser_phys;
+	struct iommu_device_ser *iommu_devices_ser;
 };
 
 static struct folio *folio_alloc_preserved(size_t sz)
@@ -2170,18 +2164,22 @@ static int iommu_liveupdate_flb_preserve(struct liveupdate_flb_op_args *argp) {
 		goto err_free;
 
 	ser->domains_ser = folio_address(folio);
+	ser->domains_ser_phys = virt_to_phys(ser->domains_ser);
 	folio =	folio_alloc_preserved(sizeof(struct device_ser) *
 				      MAX_PRESERVED_OBJS);
 	if (IS_ERR(folio))
 		goto err_free;
 
 	ser->devices_ser = folio_address(folio);
+	ser->devices_ser_phys = virt_to_phys(ser->devices_ser);
 	folio =	folio_alloc_preserved(sizeof(struct iommu_device_ser) *
 				      MAX_PRESERVED_OBJS);
 	if (IS_ERR(folio))
 		goto err_free;
 
 	ser->iommu_devices_ser = folio_address(folio);
+	ser->iommu_devices_ser_phys = virt_to_phys(ser->iommu_devices_ser);
+
 	argp->obj = ser;
 	argp->data = virt_to_phys(ser);
 	return 0;
