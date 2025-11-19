@@ -2214,16 +2214,16 @@ static void iommu_liveupdate_flb_retrieve(struct liveupdate_flb_op_args *argp)
 {
 	struct iommu_ser *ser;
 
-	BUG_ON(kho_restore_folio(argp->data));
+	BUG_ON(!kho_restore_folio(argp->data));
 	ser = phys_to_virt(argp->data);
 
-	BUG_ON(kho_restore_folio(ser->domains_ser_phys));
+	BUG_ON(!kho_restore_folio(ser->domains_ser_phys));
 	ser->domains_ser = phys_to_virt(ser->domains_ser_phys);
 
-	BUG_ON(kho_restore_folio(ser->devices_ser_phys));
+	BUG_ON(!kho_restore_folio(ser->devices_ser_phys));
 	ser->devices_ser = phys_to_virt(ser->devices_ser_phys);
 
-	BUG_ON(kho_restore_folio(ser->iommu_devices_ser_phys));
+	BUG_ON(!kho_restore_folio(ser->iommu_devices_ser_phys));
 	ser->iommu_devices_ser = phys_to_virt(ser->iommu_devices_ser_phys);
 
 	argp->obj = ser;
