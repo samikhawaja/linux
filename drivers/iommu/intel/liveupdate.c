@@ -258,6 +258,7 @@ static struct iommu_ser *get_liveupdate_state(void)
 	return ser;
 }
 */
+
 #if 0
 static void sanitize_iommu_context(struct intel_iommu *iommu)
 {
@@ -317,6 +318,8 @@ int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu, void *i
 		folio_put(virt_to_folio(iommu->root_entry));
 		iommu->root_entry = NULL;
 	}
+
+	//sanitize_iommu_context(iommu);
 	pr_info("Restored IOMMU[0x%llx] Root Table at: 0x%llx\n",
 		iommu->reg_phys, iser->root_table);
 
