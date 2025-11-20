@@ -259,28 +259,6 @@ static struct iommu_ser *get_liveupdate_state(void)
 }
 */
 
-#if 0
-static void sanitize_iommu_context(struct intel_iommu *iommu)
-{
-	struct context_entry *context;
-	int i;
-
-	/* TODO: Keep the context entries for the preserved devices. */
-	for (i = 0; i < ROOT_ENTRY_NR; i++) {
-		context = iommu_context_addr(iommu, i, 0, 0);
-		if (context)
-			memset(context, 0, PAGE_SIZE);
-
-		if (!sm_supported(iommu))
-			continue;
-
-		context = iommu_context_addr(iommu, i, 0x80, 0);
-		if (context)
-			memset(context, 0, PAGE_SIZE);
-	}
-}
-#endif
-
 static int restore_iommu_context(struct intel_iommu *iommu)
 {
 	struct context_entry *context;
