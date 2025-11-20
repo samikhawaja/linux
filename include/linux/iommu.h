@@ -267,7 +267,6 @@ struct device_ser {
 	u64 domain_idx;
 	u64 iommu_idx;
 	void *data;
-	char compatible_domain[64];
 	char compatible_iommu[64];
 };
 
@@ -949,7 +948,8 @@ extern int iommu_domain_unpreserve(struct iommu_domain *domain);
 extern int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
 extern int iommu_preserve_device(struct iommu_domain *domain, struct device *dev);
 extern int iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
-extern int iommu_get_preserved_data(struct iommu_device_ser *iommu_device_ser);
+extern int iommu_get_preserved_data(struct iommu_device_ser *iommu_device_ser, bool incoming);
+extern int iommu_get_device_preserved_data(struct device_ser *iommu_device_ser, bool incoming);
 #endif
 
 extern void iommu_domain_free(struct iommu_domain *domain);
