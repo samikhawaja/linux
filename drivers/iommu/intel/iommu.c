@@ -1616,6 +1616,22 @@ out_unmap:
 	return ret;
 }
 
+static int intel_iommu_get_preserved_data(struct intel_iommu *iommu,
+					  struct iommu_device_ser *iommu_ser,
+					  bool incoming)
+{
+	int ret;
+
+	iommu_ser->token = iommu->reg_phys;
+	strncpy(iommu_ser->compatible, "intel", sizeof(iommu_ser->compatible));
+
+	ret = iommu_get_preserved_data(iommu_ser, incoming);
+	if (ret)
+		iommu_ser->data = NULL;
+
+	return ret;
+}
+
 static int __init init_dmars(void)
 {
 	struct iommu_device_ser iommu_ser;
@@ -1642,10 +1658,7 @@ static int __init init_dmars(void)
 		}
 
 #if IS_ENABLED(CONFIG_LIVEUPDATE)
-		iommu_ser.token = iommu->reg_phys;
-		strncpy(iommu_ser.compatible, "intel", sizeof(iommu_ser.compatible));
-		if (iommu_get_preserved_data(&iommu_ser))
-			iommu_ser.data = NULL;
+		intel_iommu_get_preserved_data(iommu, &iommu_ser, true);
 #endif
 
 		intel_iommu_init_qi(iommu);
@@ -2132,10 +2145,7 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 		iommu_disable_translation(iommu);
 
 #if IS_ENABLED(CONFIG_LIVEUPDATE)
-		iommu_ser.token = iommu->reg_phys;
-		strncpy(iommu_ser.compatible, "intel", sizeof(iommu_ser.compatible));
-		if (iommu_get_preserved_data(&iommu_ser))
-			iommu_ser.data = NULL;
+		intel_iommu_get_preserved_data(iommu, &iommu_ser, true);
 #endif
 
 	ret = iommu_alloc_root_entry(iommu, iommu_ser.data);
@@ -2381,10 +2391,12 @@ static void intel_disable_iommus(void)
 		iommu_disable_translation(iommu);
 }
 
+static void intel_iommu_clean_root_table(struct intel_iommu *iommu);
 void intel_iommu_shutdown(void)
 {
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu = NULL;
+	struct iommu_device_ser iommu_ser;
 
 	if (no_iommu || dmar_disabled)
 		return;
@@ -2399,8 +2411,12 @@ void intel_iommu_shutdown(void)
 		/* Disable PMRs explicitly here. */
 		iommu_disable_protect_mem_regions(iommu);
 
-		/* Make sure the IOMMUs are switched off */
-		iommu_disable_translation(iommu);
+		if (!intel_iommu_get_preserved_data(iommu, &iommu_ser, false)) {
+			intel_iommu_clean_root_table(iommu);
+		} else {
+			/* Make sure the IOMMUs are switched off */
+			iommu_disable_translation(iommu);
+		}
 	}
 }
 
@@ -2906,6 +2922,29 @@ static const struct iommu_dirty_ops intel_second_stage_dirty_ops = {
 	IOMMU_PT_DIRTY_OPS(vtdss),
 	.set_dirty_tracking = intel_iommu_set_dirty_tracking,
 };
+
+static void intel_iommu_clean_root_table(struct intel_iommu *iommu)
+{
+	struct device_domain_info *info;
+	struct device_ser device_ser;
+	struct pci_dev *pdev = NULL;
+
+	for_each_pci_dev(pdev) {
+		info = dev_iommu_priv_get(&pdev->dev);
+		if (!info)
+			continue;
+
+		if (info->iommu != iommu)
+			continue;
+
+		strncpy(device_ser.compatible_iommu, "intel", sizeof(device_ser.compatible_iommu));
+		device_ser.token = pci_dev_id(pdev);
+		if (!iommu_get_device_preserved_data(&device_ser, false))
+			continue;
+
+		domain_context_clear(info);
+	}
+}
 
 static struct iommu_domain *
 intel_iommu_domain_alloc_second_stage(struct device *dev,
