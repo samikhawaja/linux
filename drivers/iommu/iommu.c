@@ -2253,31 +2253,79 @@ int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler)
 }
 EXPORT_SYMBOL(iommu_liveupdate_register_flb);
 
+static inline bool device_ser_match(struct device_ser * dev1,
+				    struct device_ser *dev2)
+{
+	return dev1->token == dev2->token ||
+			!strncmp(dev1->compatible_iommu, dev2->compatible_iommu, sizeof(dev2->compatible_iommu));
+}
+
 static inline bool iommu_device_ser_match(struct iommu_device_ser * iommu1,
 				   struct iommu_device_ser *iommu2)
 {
 	return iommu1->token == iommu2->token ||
-			!strncmp(iommu1->compatible, iommu2->compatible, sizeof(iommu2->token));
+			!strncmp(iommu1->compatible, iommu2->compatible, sizeof(iommu2->compatible));
 }
 
-int iommu_get_preserved_data(struct iommu_device_ser *iommu_device_ser)
+int iommu_get_device_preserved_data(struct device_ser *device_ser, bool incoming)
 {
 	struct iommu_ser *ser;
 	int ret, i;
 
-	ret = liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser);
+	if (incoming)
+		ret = liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser);
+	else
+		ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+
 	if (ret)
 		return ret;
 
+	ret = -ENONET;
+	for (i = 0; i < ser->nr_devices; ++i) {
+		if (device_ser_match(&ser->devices_ser[i], device_ser)) {
+			*device_ser = ser->devices_ser[i];
+			ret = 0;
+			break;
+		}
+	}
+
+	if (incoming)
+		liveupdate_flb_incoming_unlock(&iommu_flb, ser);
+	else
+		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
+
+	return ret;
+}
+EXPORT_SYMBOL(iommu_get_device_preserved_data);
+
+int iommu_get_preserved_data(struct iommu_device_ser *iommu_device_ser, bool incoming)
+{
+	struct iommu_ser *ser;
+	int ret, i;
+
+	if (incoming)
+		ret = liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser);
+	else
+		ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+
+	if (ret)
+		return ret;
+
+	ret = -ENONET;
 	for (i = 0; i < ser->nr_iommu_devices; ++i) {
 		if (iommu_device_ser_match(&ser->iommu_devices_ser[i], iommu_device_ser)) {
 			*iommu_device_ser = ser->iommu_devices_ser[i];
-			return 0;
+			ret = 0;
+			break;
 		}
 	}
-	liveupdate_flb_incoming_unlock(&iommu_flb, ser);
 
-	return -ENOENT;
+	if (incoming)
+		liveupdate_flb_incoming_unlock(&iommu_flb, ser);
+	else
+		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
+
+	return ret;
 }
 EXPORT_SYMBOL(iommu_get_preserved_data);
 
