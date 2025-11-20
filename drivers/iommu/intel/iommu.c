@@ -219,12 +219,12 @@ static void clear_translation_pre_enabled(struct intel_iommu *iommu)
 	iommu->flags &= ~VTD_FLAG_TRANS_PRE_ENABLED;
 }
 
-static void init_translation_status(struct intel_iommu *iommu)
+static void init_translation_status(struct intel_iommu *iommu, bool restoring)
 {
 	u32 gsts;
 
 	gsts = readl(iommu->reg + DMAR_GSTS_REG);
-	if (gsts & DMA_GSTS_TES)
+	if (!restoring && (gsts & DMA_GSTS_TES))
 		iommu->flags |= VTD_FLAG_TRANS_PRE_ENABLED;
 }
 
@@ -1662,7 +1662,7 @@ static int __init init_dmars(void)
 #endif
 
 		intel_iommu_init_qi(iommu);
-		init_translation_status(iommu);
+		init_translation_status(iommu, !!iommu_ser.data);
 
 		if (translation_pre_enabled(iommu) && !is_kdump_kernel()) {
 			iommu_disable_translation(iommu);
