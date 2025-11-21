@@ -2210,7 +2210,7 @@ static void iommu_liveupdate_flb_finish(struct liveupdate_flb_op_args *argp)
 	folio_put(virt_to_folio(ser));
 }
 
-static void iommu_liveupdate_flb_retrieve(struct liveupdate_flb_op_args *argp)
+static int iommu_liveupdate_flb_retrieve(struct liveupdate_flb_op_args *argp)
 {
 	struct iommu_ser *ser;
 
@@ -2227,6 +2227,8 @@ static void iommu_liveupdate_flb_retrieve(struct liveupdate_flb_op_args *argp)
 	ser->iommu_devices_ser = phys_to_virt(ser->iommu_devices_ser_phys);
 
 	argp->obj = ser;
+
+	return 0;
 }
 
 static struct liveupdate_flb_ops iommu_flb_ops = {
