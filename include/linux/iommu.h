@@ -252,12 +252,15 @@ struct iommu_domain {
 	};
 
 #ifdef CONFIG_LIVEUPDATE
-	u64 preserved_id;
+	struct iommu_domain_ser *preserved_state;
 #endif
 };
 
 #ifdef CONFIG_LIVEUPDATE
 struct iommu_domain_ser {
+	u64 idx;
+	u64 attach_count;
+	u64 restore_count;
 	void *data;
 	char compatible[64];
 	struct iommu_domain *live_domain;
@@ -273,6 +276,7 @@ struct device_ser {
 };
 
 struct iommu_device_ser {
+	u64 idx;
 	u64 token;
 	void *data;
 	char compatible[64];
@@ -838,7 +842,7 @@ struct iommu_device {
 	struct iommu_group *singleton_group;
 	u32 max_pasids;
 	bool ready;
-	u64 preserve_ID;
+	struct iommu_device_ser *preserved_state;
 };
 
 /**
