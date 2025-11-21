@@ -233,7 +233,7 @@ static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 	/* TODO: call iommu_unpreserve_domain for all preserved domains */
 
 	folio_lu = pfn_folio(PHYS_PFN(args->serialized_data));
-	WARN_ON(kho_unpreserve_folio(folio_lu));
+	kho_unpreserve_folio(folio_lu);
 	folio_put(folio_lu);
 
 	iommufd_ctx_put(ictx);

@@ -22,8 +22,8 @@
 
 #define ksft_assert(condition) \
 	do { if (!(condition)) \
-	ksft_exit_fail_msg("Failed: %s at %s %d\n", \
-	#condition, __FILE__, __LINE__); } while (0)
+	ksft_exit_fail_msg("Failed: %s at %s %d: %s\n", \
+	#condition, __FILE__, __LINE__, strerror(errno)); } while (0)
 
 int setup_cdev(const char *vfio_cdev_path)
 {
