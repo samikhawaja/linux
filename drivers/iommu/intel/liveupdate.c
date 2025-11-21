@@ -14,11 +14,18 @@
 #include "iommu.h"
 #include "../iommu-pages.h"
 
+struct iommu_domain_attachments
+{
+	u32 domain_idx;
+	u32 did;
+} __packed;
+
 struct iommu_unit_ser {
 	u64 phys_addr;
 	u64 root_table;
-	u64 count_dids;
-	u16 dids[0];
+	u64 count_max_domains;
+	u64 count_domains;
+	struct iommu_domain_attachments domains[0];
 } __packed;
 
 #if 0
@@ -287,8 +294,8 @@ static void restore_used_domain_ids(struct intel_iommu *iommu, struct iommu_unit
 	unsigned int count;
 	int id;
 
-	for (count = 0; count < iommu_ser->count_dids; count++) {
-		id = iommu_ser->dids[count];
+	for (count = 0; count < iommu_ser->count_domains; count++) {
+		id = iommu_ser->domains[count].did;
 		BUG_ON(ida_alloc_range(&iommu->domain_ida, id, id, GFP_KERNEL) < 0);
 	}
 }
@@ -341,15 +348,6 @@ static void preserved_folio_put(struct folio *folio)
 	folio_put(folio);
 }
 
-int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_ser)
-{
-	return 0;
-}
-
-void intel_iommu_unpreserve_device(struct device *dev, struct device_ser *device_ser)
-{
-}
-
 static int count_domain_ids(struct intel_iommu *iommu)
 {
 	unsigned int count = 0;
@@ -362,17 +360,38 @@ static int count_domain_ids(struct intel_iommu *iommu)
 	return count;
 }
 
-static void preserve_used_domain_ids(struct intel_iommu *iommu, struct iommu_unit_ser *iommu_ser)
+static int preserve_iommu_domain_attachment(struct device_domain_info *info)
 {
-	unsigned int count = 0;
-	int id;
+	struct iommu_unit_ser *iommu_ser;
+	int idx;
 
-	for (id = 0; id < cap_ndoms(iommu->cap); id++) {
-		if (ida_exists(&iommu->domain_ida, id)) {
-			iommu_ser->dids[count] = id;
-			count++;
-		}
-	}
+	/* Do this in a lock */
+	iommu_ser = info->iommu->iommu.preserved_state->data;
+	if (iommu_ser->count_domains == iommu_ser->count_max_domains)
+		return -ENOSPC;
+
+	idx = iommu_ser->count_domains++;
+	iommu_ser->domains[idx].did = domain_id_iommu(info->domain, info->iommu);
+	iommu_ser->domains[idx].domain_idx = info->domain->domain.preserved_state->idx;
+
+	return 0;
+}
+
+int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_ser)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+
+	if (!dev_is_pci(dev))
+		return -ENOTSUPP;
+
+	if (!info)
+		return -EINVAL;
+
+	return preserve_iommu_domain_attachment(info);
+}
+
+void intel_iommu_unpreserve_device(struct device *dev, struct device_ser *device_ser)
+{
 }
 
 int intel_iommu_preserve(struct iommu_device *iommu_dev, struct iommu_device_ser *iommu_device_ser)
@@ -385,7 +404,8 @@ int intel_iommu_preserve(struct iommu_device *iommu_dev, struct iommu_device_ser
 	iommu = container_of(iommu_dev, struct intel_iommu, iommu);
 
 	count_dids = count_domain_ids(iommu);
-	folio = folio_alloc_preserved(sizeof(*ser) + count_dids * sizeof(u16));
+	folio = folio_alloc_preserved(sizeof(*ser) +
+				      count_dids * sizeof(struct iommu_domain_attachments));
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
 
@@ -404,8 +424,7 @@ int intel_iommu_preserve(struct iommu_device *iommu_dev, struct iommu_device_ser
 
 	ser->phys_addr = iommu->reg_phys;
 	ser->root_table = __pa(iommu->root_entry);
-	ser->count_dids = count_dids;
-	preserve_used_domain_ids(iommu, ser);
+	ser->count_max_domains = count_dids;
 	strncpy(iommu_device_ser->compatible, "intel", sizeof(iommu_device_ser->compatible));
 	iommu_device_ser->token = iommu->reg_phys;
 	iommu_device_ser->data = ser;
