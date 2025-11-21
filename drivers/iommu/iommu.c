@@ -2373,6 +2373,7 @@ int iommu_domain_preserve(struct iommu_domain *domain)
 
 	idx = ser->nr_domains++;
 	domain_ser = &ser->domains_ser[idx];
+	domain_ser->idx = idx;
 	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 
 	ret = domain->ops->preserve(domain, domain_ser);
@@ -2381,8 +2382,8 @@ int iommu_domain_preserve(struct iommu_domain *domain)
 		return ret;
 	}
 
-	domain->preserved_id = idx + 1;
-	return domain->preserved_id;
+	domain->preserved_state = domain_ser;
+	return domain_ser->idx;
 }
 EXPORT_SYMBOL_GPL(iommu_domain_preserve);
 
@@ -2399,8 +2400,13 @@ int iommu_domain_unpreserve(struct iommu_domain *domain)
 	if (ret)
 		return ret;
 
-	domain_ser = &ser->domains_ser[domain->preserved_id - 1];
+	domain_ser = domain->preserved_state;
+	if (domain_ser->attach_count)
+		ret = -EBUSY;
+
 	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
+	if (ret)
+		return ret;
 
 	domain->ops->unpreserve(domain, domain_ser);
 	domain_ser->data = 0;
@@ -2427,8 +2433,9 @@ static int iommu_preserve(struct iommu_device *iommu)
 		return -ENOMEM;
 	}
 
-	iommu_device_ser = &ser->iommu_devices_ser[ser->nr_iommu_devices++];
-	iommu->preserve_ID = ser->nr_iommu_devices;
+	iommu_device_ser = &ser->iommu_devices_ser[ser->nr_iommu_devices];
+	iommu_device_ser->idx = ser->nr_iommu_devices++;
+	iommu->preserved_state = iommu_device_ser;
 	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 
 	ret = iommu->ops->preserve(iommu, iommu_device_ser);
@@ -2456,7 +2463,7 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 		return -EOPNOTSUPP;
 
 
-	if (!iommu->iommu_dev->preserve_ID) {
+	if (!iommu->iommu_dev->preserved_state) {
 		ret = iommu_preserve(iommu->iommu_dev);
 		if (ret)
 			return ret;
@@ -2473,10 +2480,11 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 
 	idx = ser->nr_devices++;
 	device_ser = &ser->devices_ser[idx];
-	device_ser->domain_idx = domain->preserved_id - 1;
-	device_ser->iommu_idx = iommu->iommu_dev->preserve_ID - 1;
+	device_ser->domain_idx = domain->preserved_state->idx;
+	device_ser->iommu_idx = iommu->iommu_dev->preserved_state->idx;
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain = pci_domain_nr(pdev->bus);
+	domain->preserved_state->attach_count++;
 	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 
 	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
