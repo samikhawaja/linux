@@ -917,6 +917,7 @@ EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(map_pages), "GENERIC_PT_IOMMU");
 
 struct iommu_pt_ser {
 	u64 top_table;
+	u64 top_level;
 };
 
 static struct folio *folio_alloc_preserved(size_t sz)
@@ -964,6 +965,7 @@ void DOMAIN_NS(unpreserve)(struct iommu_domain *domain, struct iommu_domain_ser 
 	iommu_unpreserve_pages(&collect.free_list, -1);
 }
 EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(unpreserve), "GENERIC_PT_IOMMU");
+
 /**
  * preserve() - Preserve page tables and other state of a domain.
  * @domain: Domain to preserve
@@ -1000,6 +1002,7 @@ int DOMAIN_NS(preserve)(struct iommu_domain *domain, struct iommu_domain_ser *se
 	}
 
 	pt_ser->top_table = virt_to_phys(range.top_table);
+	pt_ser->top_level = range.top_level;
 
 	return 0;
 preserve_err:
@@ -1007,6 +1010,57 @@ preserve_err:
         return ret;
 }
 EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(preserve), "GENERIC_PT_IOMMU");
+
+static int __restore_tables(struct pt_range *range, void *arg,
+			    unsigned int level, struct pt_table_p *table)
+{
+
+	struct pt_state pts = pt_init(range, level, table);
+	int ret;
+
+	for_each_pt_level_entry(&pts) {
+		if (pts.type == PT_ENTRY_TABLE) {
+			iommu_restore_page(virt_to_phys(pts.table_lower));
+			ret = pt_descend(&pts, arg, __read_and_clear_dirty);
+			if (ret)
+				return ret;
+			continue;
+		}
+	}
+	return 0;
+}
+
+/**
+ * restore() - Restore page tables and other state of a domain.
+ * @domain: Domain to preserve
+ *
+ * Returns: -ERRNO on failure, on on success.
+ */
+int DOMAIN_NS(restore)(struct iommu_domain *domain, struct iommu_domain_ser *ser)
+{
+	struct pt_iommu *iommu_table =
+		container_of(domain, struct pt_iommu, domain);
+	struct pt_common *common = common_from_iommu(iommu_table);
+	struct iommu_pt_ser *pt_ser;
+	struct pt_range range;
+
+	pt_ser = ser->data;
+	BUG_ON(!pt_ser);
+	iommu_restore_page(pt_ser->top_table);
+
+	/* Free new table */
+	iommu_free_pages(range.top_table);
+
+	/* Set the restored top table */
+	pt_top_set(common, phys_to_virt(pt_ser->top_table), pt_ser->top_level);
+
+	/* Collect all pages*/
+	range = pt_all_range(common);
+	pt_walk_range(&range, __restore_tables, NULL);
+
+	return 0;
+}
+EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(restore), "GENERIC_PT_IOMMU");
 
 struct pt_unmap_args {
 	struct iommu_pages_list free_list;
