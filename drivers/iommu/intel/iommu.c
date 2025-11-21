@@ -2937,8 +2937,8 @@ static void intel_iommu_clean_root_table(struct intel_iommu *iommu)
 		if (info->iommu != iommu)
 			continue;
 
-		strncpy(device_ser.compatible_iommu, "intel", sizeof(device_ser.compatible_iommu));
-		device_ser.token = pci_dev_id(pdev);
+		device_ser.devid = pci_dev_id(pdev);
+		device_ser.pci_domain = pci_domain_nr(pdev->bus);
 		if (!iommu_get_device_preserved_data(&device_ser, false))
 			continue;
 

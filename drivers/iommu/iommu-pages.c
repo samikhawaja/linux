@@ -158,6 +158,25 @@ void iommu_unpreserve_pages(struct iommu_pages_list *list, int count)
 }
 EXPORT_SYMBOL_GPL(iommu_unpreserve_pages);
 
+void iommu_restore_page(u64 phys)
+{
+	struct ioptdesc *iopt;
+	struct folio *folio;
+	unsigned long pgcnt;
+	unsigned int order;
+
+	folio = kho_restore_folio(phys);
+	BUG_ON(!folio);
+
+	iopt = folio_ioptdesc(folio);
+
+	order = folio_order(folio);
+	pgcnt = 1UL << order;
+	mod_node_page_state(folio_pgdat(folio), NR_IOMMU_PAGES, pgcnt);
+	lruvec_stat_mod_folio(folio, NR_SECONDARY_PAGETABLE, pgcnt);
+}
+EXPORT_SYMBOL_GPL(iommu_restore_page);
+
 int iommu_preserve_pages(struct iommu_pages_list *list)
 {
 	struct ioptdesc *iopt;

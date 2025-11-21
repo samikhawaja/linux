@@ -2256,8 +2256,7 @@ EXPORT_SYMBOL(iommu_liveupdate_register_flb);
 static inline bool device_ser_match(struct device_ser * dev1,
 				    struct device_ser *dev2)
 {
-	return dev1->token == dev2->token ||
-			!strncmp(dev1->compatible_iommu, dev2->compatible_iommu, sizeof(dev2->compatible_iommu));
+	return dev1->devid == dev2->devid && dev1->pci_domain == dev2->pci_domain;
 }
 
 static inline bool iommu_device_ser_match(struct iommu_device_ser * iommu1,
@@ -2265,6 +2264,29 @@ static inline bool iommu_device_ser_match(struct iommu_device_ser * iommu1,
 {
 	return iommu1->token == iommu2->token ||
 			!strncmp(iommu1->compatible, iommu2->compatible, sizeof(iommu2->compatible));
+}
+
+struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool incoming)
+{
+	struct iommu_domain_ser *domain_ser;
+	struct iommu_ser *ser;
+	int ret;
+
+	if (incoming)
+		ret = liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser);
+	else
+		ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+
+	if (ret)
+		return ERR_PTR(ret);
+
+	domain_ser = &ser->domains_ser[domain_idx];
+	if (incoming)
+		liveupdate_flb_incoming_unlock(&iommu_flb, ser);
+	else
+		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
+
+	return domain_ser;
 }
 
 int iommu_get_device_preserved_data(struct device_ser *device_ser, bool incoming)
@@ -2419,11 +2441,13 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 	struct device_ser *device_ser;
 	struct dev_iommu *iommu;
 	struct iommu_ser *ser;
+	struct pci_dev *pdev;
 	int ret, idx;
 
 	if (!dev_is_pci(dev))
 		return -EOPNOTSUPP;
 
+	pdev = to_pci_dev(dev);
 	iommu = dev_iommu_get(dev);
 	if (!iommu->iommu_dev->ops->preserve_device ||
 	    !iommu->iommu_dev->ops->preserve)
@@ -2449,6 +2473,8 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 	device_ser = &ser->devices_ser[idx];
 	device_ser->domain_idx = domain->preserved_id - 1;
 	device_ser->iommu_idx = iommu->iommu_dev->preserve_ID - 1;
+	device_ser->devid = pci_dev_id(pdev);
+	device_ser->pci_domain = pci_domain_nr(pdev->bus);
 	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 
 	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
@@ -3356,6 +3382,46 @@ int iommu_fwspec_add_ids(struct device *dev, const u32 *ids, int num_ids)
 }
 EXPORT_SYMBOL_GPL(iommu_fwspec_add_ids);
 
+static struct iommu_domain *__iommu_group_restore_domain(struct iommu_group *group)
+{
+	struct iommu_domain_ser *domain_ser;
+	struct device_ser device_ser;
+	struct iommu_domain *domain;
+	struct pci_dev *pdev;
+	struct device *dev;
+	int ret;
+
+	dev = iommu_group_first_dev(group);
+	if (!dev_is_pci(dev))
+		return ERR_PTR(-ENOENT);
+
+	pdev = to_pci_dev(dev);
+	device_ser.devid = pci_dev_id(pdev);
+	device_ser.pci_domain = pci_domain_nr(pdev->bus);
+	ret = iommu_get_device_preserved_data(&device_ser, true);
+	if (ret)
+		return ERR_PTR(ret);
+
+	domain_ser = iommu_get_domain_preserved_data(device_ser.domain_idx, true);
+	if (IS_ERR(domain_ser))
+		return ERR_PTR(PTR_ERR(domain_ser));
+
+	if (domain_ser->live_domain) {
+		return domain_ser->live_domain;
+	}
+
+	domain = iommu_paging_domain_alloc(dev);
+	if (IS_ERR(domain))
+		return domain;
+
+	ret = domain->ops->restore(domain, domain_ser);
+	if (ret)
+		return ERR_PTR(ret);
+
+	domain_ser->live_domain = domain;
+	return domain;
+}
+
 /**
  * iommu_setup_default_domain - Set the default_domain for the group
  * @group: Group to change
@@ -3370,8 +3436,8 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 				      int target_type)
 {
 	struct iommu_domain *old_dom = group->default_domain;
+	struct iommu_domain *dom, *restored_domain;
 	struct group_device *gdev;
-	struct iommu_domain *dom;
 	bool direct_failed;
 	int req_type;
 	int ret;
@@ -3415,6 +3481,9 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 	/* We must set default_domain early for __iommu_device_set_domain */
 	group->default_domain = dom;
 	if (!group->domain) {
+		restored_domain = __iommu_group_restore_domain(group);
+		if (IS_ERR(restored_domain))
+			restored_domain = dom;
 		/*
 		 * Drivers are not allowed to fail the first domain attach.
 		 * The only way to recover from this is to fail attaching the
@@ -3422,7 +3491,7 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 		 * in group->default_domain so it is freed after.
 		 */
 		ret = __iommu_group_set_domain_internal(
-			group, dom, IOMMU_SET_DOMAIN_MUST_SUCCEED);
+			group, restored_domain, IOMMU_SET_DOMAIN_MUST_SUCCEED);
 		if (WARN_ON(ret))
 			goto out_free_old;
 	} else {
