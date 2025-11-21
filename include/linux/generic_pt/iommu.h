@@ -203,6 +203,8 @@ struct pt_iommu_cfg {
 				      struct iommu_domain_ser *ser);           \
 	void pt_iommu_##fmt##_unpreserve(struct iommu_domain *domain,          \
 					 struct iommu_domain_ser *ser);        \
+	int pt_iommu_##fmt##_restore(struct iommu_domain *domain,              \
+				     struct iommu_domain_ser *ser);            \
 	size_t pt_iommu_##fmt##_unmap_pages(                                   \
 		struct iommu_domain *domain, unsigned long iova,               \
 		size_t pgsize, size_t pgcount,                                 \
@@ -231,6 +233,7 @@ struct pt_iommu_cfg {
 	.map_pages = &pt_iommu_##fmt##_map_pages,       \
 	.preserve = &pt_iommu_##fmt##_preserve,		\
 	.unpreserve = &pt_iommu_##fmt##_unpreserve,	\
+	.restore = &pt_iommu_##fmt##_restore,		\
 	.unmap_pages = &pt_iommu_##fmt##_unmap_pages
 #define IOMMU_PT_DIRTY_OPS(fmt) \
 	.read_and_clear_dirty = &pt_iommu_##fmt##_read_and_clear_dirty
