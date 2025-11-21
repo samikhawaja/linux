@@ -17,7 +17,9 @@
 struct iommu_unit_ser {
 	u64 phys_addr;
 	u64 root_table;
-};
+	u64 count_dids;
+	u16 dids[0];
+} __packed;
 
 #if 0
 struct device_ser {
@@ -280,6 +282,17 @@ static int restore_iommu_context(struct intel_iommu *iommu)
 	return ret;
 }
 
+static void restore_used_domain_ids(struct intel_iommu *iommu, struct iommu_unit_ser *iommu_ser)
+{
+	unsigned int count;
+	int id;
+
+	for (count = 0; count < iommu_ser->count_dids; count++) {
+		id = iommu_ser->dids[count];
+		BUG_ON(ida_alloc_range(&iommu->domain_ida, id, id, GFP_KERNEL) < 0);
+	}
+}
+
 int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu, void *iommu_ser)
 {
 	struct iommu_unit_ser *iser = iommu_ser;
@@ -297,7 +310,7 @@ int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu, void *i
 		iommu->root_entry = NULL;
 	}
 
-	//sanitize_iommu_context(iommu);
+	restore_used_domain_ids(iommu, iser);
 	pr_info("Restored IOMMU[0x%llx] Root Table at: 0x%llx\n",
 		iommu->reg_phys, iser->root_table);
 
@@ -337,16 +350,42 @@ void intel_iommu_unpreserve_device(struct device *dev, struct device_ser *device
 {
 }
 
+static int count_domain_ids(struct intel_iommu *iommu)
+{
+	unsigned int count = 0;
+	int id;
+
+	for (id = 0; id < cap_ndoms(iommu->cap); id++)
+		if (ida_exists(&iommu->domain_ida, id))
+			count++;
+
+	return count;
+}
+
+static void preserve_used_domain_ids(struct intel_iommu *iommu, struct iommu_unit_ser *iommu_ser)
+{
+	unsigned int count = 0;
+	int id;
+
+	for (id = 0; id < cap_ndoms(iommu->cap); id++) {
+		if (ida_exists(&iommu->domain_ida, id)) {
+			iommu_ser->dids[count] = id;
+			count++;
+		}
+	}
+}
+
 int intel_iommu_preserve(struct iommu_device *iommu_dev, struct iommu_device_ser *iommu_device_ser)
 {
 	struct iommu_unit_ser *ser;
 	struct intel_iommu *iommu;
 	struct folio *folio;
-	int ret;
+	int ret, count_dids;
 
 	iommu = container_of(iommu_dev, struct intel_iommu, iommu);
 
-	folio = folio_alloc_preserved(sizeof(*ser));
+	count_dids = count_domain_ids(iommu);
+	folio = folio_alloc_preserved(sizeof(*ser) + count_dids * sizeof(u16));
 	if (IS_ERR(folio))
 		return PTR_ERR(folio);
 
@@ -365,6 +404,8 @@ int intel_iommu_preserve(struct iommu_device *iommu_dev, struct iommu_device_ser
 
 	ser->phys_addr = iommu->reg_phys;
 	ser->root_table = __pa(iommu->root_entry);
+	ser->count_dids = count_dids;
+	preserve_used_domain_ids(iommu, ser);
 	strncpy(iommu_device_ser->compatible, "intel", sizeof(iommu_device_ser->compatible));
 	iommu_device_ser->token = iommu->reg_phys;
 	iommu_device_ser->data = ser;
