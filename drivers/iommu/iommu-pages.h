@@ -58,6 +58,7 @@ int iommu_preserve_page(void *virt);
 void iommu_unpreserve_page(void *virt);
 int iommu_preserve_pages(struct iommu_pages_list *list);
 void iommu_unpreserve_pages(struct iommu_pages_list *list, int count);
+void iommu_restore_page(u64 phys);
 #endif
 
 /**
