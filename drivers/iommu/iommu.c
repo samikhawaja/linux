@@ -2456,12 +2456,14 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 	if (!dev_is_pci(dev))
 		return -EOPNOTSUPP;
 
+	if (!domain->preserved_state)
+		return -EINVAL;
+
 	pdev = to_pci_dev(dev);
 	iommu = dev_iommu_get(dev);
 	if (!iommu->iommu_dev->ops->preserve_device ||
 	    !iommu->iommu_dev->ops->preserve)
 		return -EOPNOTSUPP;
-
 
 	if (!iommu->iommu_dev->preserved_state) {
 		ret = iommu_preserve(iommu->iommu_dev);
@@ -2484,13 +2486,13 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 	device_ser->iommu_idx = iommu->iommu_dev->preserved_state->idx;
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain = pci_domain_nr(pdev->bus);
-	domain->preserved_state->attach_count++;
 	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 
 	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
 	if (ret)
 		device_ser->data = NULL;
 
+	domain->preserved_state->attach_count++;
 	return ret;
 }
 
