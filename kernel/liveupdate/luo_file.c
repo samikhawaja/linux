@@ -144,6 +144,8 @@ static LIST_HEAD(luo_file_handler_list);
  *                 file_set's list of preserved files.
  * @token:         The user-provided unique token used to identify this file.
  *
+ * @refcount:      Refcount of the presereved file.
+ *
  * This structure is the core in-kernel representation of a single file being
  * managed through a live update. An instance is created by luo_preserve_file()
  * to link a 'struct file' to its corresponding handler, a user-provided token,
@@ -165,6 +167,7 @@ struct luo_file {
 	struct mutex mutex;
 	struct list_head list;
 	u64 token;
+	u32 refcount;
 };
 
 static int luo_alloc_files_mem(struct luo_file_set *file_set)
@@ -299,9 +302,11 @@ int luo_preserve_file(struct luo_file_set *file_set, u64 token, int fd)
 	luo_file->fh = fh;
 	luo_file->token = token;
 	luo_file->retrieved = false;
+	luo_file->refcount = 1;
 	mutex_init(&luo_file->mutex);
 
 	args.handler = fh;
+	args.session = luo_session_from_file_set(file_set);
 	args.file = file;
 	err = fh->ops->preserve(&args);
 	if (err)
@@ -326,35 +331,26 @@ err_fput:
 	return err;
 }
 
-/**
- * luo_file_unpreserve_files - Unpreserves all files from a file_set.
- * @file_set: The files to be cleaned up.
- *
- * This function serves as the primary cleanup path for a file_set. It is
- * invoked when the userspace agent closes the file_set's file descriptor.
- *
- * For each file, it performs the following cleanup actions:
- *   1. Calls the handler's .unpreserve() callback to allow the handler to
- *      release any resources it allocated.
- *   2. Removes the file from the file_set's internal tracking list.
- *   3. Releases the reference to the 'struct file' that was taken by
- *      luo_preserve_file() via fput(), returning ownership.
- *   4. Frees the memory associated with the internal 'struct luo_file'.
- *
- * After all individual files are unpreserved, it frees the contiguous memory
- * block that was allocated to hold their serialization data.
- */
-void luo_file_unpreserve_files(struct luo_file_set *file_set)
+/* Unpreserve all files that have refcount equal to zero. */
+static int __unpreserve_refcount_zero_files(struct luo_file_set *file_set)
 {
-	struct luo_file *luo_file;
+	struct luo_file *luo_file, *n;
+	int count = 0;
 
-	while (!list_empty(&file_set->files_list)) {
+	list_for_each_entry_safe(luo_file, n, &file_set->files_list, list) {
 		struct liveupdate_file_op_args args = {0};
 
-		luo_file = list_last_entry(&file_set->files_list,
-					   struct luo_file, list);
+		/*
+		 * Refcount of each luo file should be zero to unpreserve. Some
+		 * handler may call liveupdate_put_file_outgoing to reduce the
+		 * refcount if it had called liveupdate_get_file_outgoing
+		 * previously.
+		 */
+		if (luo_file->refcount)
+			continue;
 
 		args.handler = luo_file->fh;
+		args.session = luo_session_from_file_set(file_set);
 		args.file = luo_file->file;
 		args.serialized_data = luo_file->serialized_data;
 		args.private_data = luo_file->private_data;
@@ -367,9 +363,41 @@ void luo_file_unpreserve_files(struct luo_file_set *file_set)
 		fput(luo_file->file);
 		mutex_destroy(&luo_file->mutex);
 		kfree(luo_file);
+		++count;
 	}
 
+	return count;
+}
+
+/**
+ * luo_file_unpreserve_files - Unpreserves all files from a file_set.
+ * @file_set: The files to be cleaned up.
+ *
+ * This function serves as the primary cleanup path for a file_set. It is
+ * invoked when the userspace agent closes the file_set's file descriptor.
+ *
+ * It iterates through all files and decrements the refcount of each by one.
+ * Then it calls __unpreserve_refcount_zero_files on the file set to unpreserve
+ * the files that have zero refcount. It does this repeatedly until the file set
+ * is empty.
+ *
+ * After all individual files are unpreserved, it frees the contiguous memory
+ * block that was allocated to hold their serialization data.
+ * Return: 0 on success. Returns -EBUSY if some files could not be unpreserved.
+ */
+int luo_file_unpreserve_files(struct luo_file_set *file_set)
+{
+	struct luo_file *luo_file;
+
+	list_for_each_entry(luo_file, &file_set->files_list, list)
+		luo_file->refcount--;
+
+	while (!list_empty(&file_set->files_list))
+		if (!__unpreserve_refcount_zero_files(file_set))
+			return -EBUSY;
+
 	luo_free_files_mem(file_set);
+	return 0;
 }
 
 static int luo_file_freeze_one(struct luo_file_set *file_set,
@@ -383,6 +411,7 @@ static int luo_file_freeze_one(struct luo_file_set *file_set,
 		struct liveupdate_file_op_args args = {0};
 
 		args.handler = luo_file->fh;
+		args.session = luo_session_from_file_set(file_set);
 		args.file = luo_file->file;
 		args.serialized_data = luo_file->serialized_data;
 		args.private_data = luo_file->private_data;
@@ -404,6 +433,7 @@ static void luo_file_unfreeze_one(struct luo_file_set *file_set,
 		struct liveupdate_file_op_args args = {0};
 
 		args.handler = luo_file->fh;
+		args.session = luo_session_from_file_set(file_set);
 		args.file = luo_file->file;
 		args.serialized_data = luo_file->serialized_data;
 		args.private_data = luo_file->private_data;
@@ -590,6 +620,7 @@ int luo_retrieve_file(struct luo_file_set *file_set, u64 token,
 	}
 
 	args.handler = luo_file->fh;
+	args.session = luo_session_from_file_set(file_set);
 	args.serialized_data = luo_file->serialized_data;
 	err = luo_file->fh->ops->retrieve(&args);
 	if (!err) {
@@ -615,6 +646,7 @@ static int luo_file_can_finish_one(struct luo_file_set *file_set,
 		struct liveupdate_file_op_args args = {0};
 
 		args.handler = luo_file->fh;
+		args.session = luo_session_from_file_set(file_set);
 		args.file = luo_file->file;
 		args.serialized_data = luo_file->serialized_data;
 		args.retrieved = luo_file->retrieved;
@@ -632,6 +664,7 @@ static void luo_file_finish_one(struct luo_file_set *file_set,
 	guard(mutex)(&luo_file->mutex);
 
 	args.handler = luo_file->fh;
+	args.session = luo_session_from_file_set(file_set);
 	args.file = luo_file->file;
 	args.serialized_data = luo_file->serialized_data;
 	args.retrieved = luo_file->retrieved;
@@ -919,3 +952,98 @@ err_register:
 	return err;
 }
 EXPORT_SYMBOL_GPL(liveupdate_unregister_file_handler);
+
+/**
+ * liveupdate_get_outgoing - Get the token for a preserved file.
+ * @s:      The outgoing liveupdate session.
+ * @file:   The file object to search for.
+ * @tokenp: Output parameter for the found token.
+ *
+ * Searches the list of preserved files in an outgoing session for a matching
+ * file object. If found, the corresponding user-provided token is returned.
+ * Once a preserved file is found, the file is refcounted and cannot be
+ * unpreserved until refcount goes to zero.
+ *
+ * This function is intended for in-kernel callers that need to correlate a
+ * file with its liveupdate token.
+ *
+ * Context: Can be called from any context that can acquire the session mutex.
+ * Return: 0 on success, -ENOENT if the file is not preserved in this session.
+ */
+int liveupdate_get_file_outgoing(struct liveupdate_session *s,
+				 struct file *file, u64 *tokenp)
+{
+	struct luo_file_set *file_set = luo_file_set_from_session(s);
+	struct luo_file *luo_file;
+	int err = -ENOENT;
+
+	list_for_each_entry(luo_file, &file_set->files_list, list) {
+		if (luo_file->file == file) {
+			if (tokenp) {
+				luo_file->refcount++;
+				*tokenp = luo_file->token;
+			}
+			err = 0;
+			break;
+		}
+	}
+
+	return err;
+}
+
+/**
+ * liveupdate_put_file_outgoing - Decrements refcount of a preserved file.
+ * @s:      The outgoing liveupdate session.
+ * @file:   The file object to search for.
+ * @token:  Token that was returned when refcount was incremented.
+ *
+ * Searches the list of preserved files in an outgoing session for a matching
+ * file object. If found, the corresponding user-provided token is matched with
+ * the token parameter to this function. If it matches then the refcount to the
+ * file is decremented.
+ *
+ * Context: Can be called from any context that can acquire the session mutex.
+ */
+void liveupdate_put_file_outgoing(struct liveupdate_session *s,
+				 struct file *file, u64 token)
+{
+	struct luo_file_set *file_set = luo_file_set_from_session(s);
+	struct luo_file *luo_file;
+
+	list_for_each_entry(luo_file, &file_set->files_list, list) {
+		if (luo_file->file == file && luo_file->token == token) {
+			luo_file->refcount--;
+			break;
+		}
+	}
+}
+
+/**
+ * liveupdate_get_file_incoming - Retrieves a preserved file for in-kernel use.
+ * @s:      The incoming liveupdate session (restored from the previous kernel).
+ * @token:  The unique token identifying the file to retrieve.
+ * @filep:  On success, this will be populated with a pointer to the retrieved
+ *          'struct file'.
+ *
+ * Provides a kernel-internal API for other subsystems to retrieve their
+ * preserved files after a live update. This function is a simple wrapper
+ * around luo_retrieve_file(), allowing callers to find a file by its token.
+ *
+ * The operation is idempotent; subsequent calls for the same token will return
+ * a pointer to the same 'struct file' object.
+ *
+ * The caller receives a new reference to the file and must call fput() when it
+ * is no longer needed. The file's lifetime is managed by LUO and any userspace
+ * file descriptors. If the caller needs to hold a reference to the file beyond
+ * the immediate scope, it must call get_file() itself.
+ *
+ * Context: Can be called from any context in the new kernel that has a handle
+ *          to a restored session.
+ * Return: 0 on success. Returns -ENOENT if no file with the matching token is
+ *         found, or any other negative errno on failure.
+ */
+int liveupdate_get_file_incoming(struct liveupdate_session *s, u64 token,
+				 struct file **filep)
+{
+	return luo_retrieve_file(luo_file_set_from_session(s), token, filep);
+}
