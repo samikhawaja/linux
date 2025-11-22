@@ -3744,18 +3744,26 @@ static int __iommu_group_alloc_blocking_domain(struct iommu_group *group)
 
 static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner)
 {
+	struct device_ser *device_ser;
+	bool restored = false;
 	int ret;
 
-	if ((group->domain && group->domain != group->default_domain) ||
-	    !xa_empty(&group->pasid_array))
+	if (!iommu_get_device_preserved_data(iommu_group_first_dev(group),
+					     true, &device_ser))
+		restored = true;
+
+	if (!restored && ((group->domain && group->domain != group->default_domain) ||
+	    !xa_empty(&group->pasid_array)))
 		return -EBUSY;
 
-	ret = __iommu_group_alloc_blocking_domain(group);
-	if (ret)
-		return ret;
-	ret = __iommu_group_set_domain(group, group->blocking_domain);
-	if (ret)
-		return ret;
+	if (!restored) {
+		ret = __iommu_group_alloc_blocking_domain(group);
+		if (ret)
+			return ret;
+		ret = __iommu_group_set_domain(group, group->blocking_domain);
+		if (ret)
+			return ret;
+	}
 
 	group->owner = owner;
 	group->owner_cnt++;
