@@ -23,6 +23,7 @@ struct file;
 /**
  * struct liveupdate_file_op_args - Arguments for file operation callbacks.
  * @handler:          The file handler being called.
+ * @session:          The session this file belongs to.
  * @retrieved:        The retrieve status for the 'can_finish / finish'
  *                    operation.
  * @file:             The file object. For retrieve: [OUT] The callback sets
@@ -40,6 +41,7 @@ struct file;
  */
 struct liveupdate_file_op_args {
 	struct liveupdate_file_handler *handler;
+	struct liveupdate_session *session;
 	bool retrieved;
 	struct file *file;
 	u64 serialized_data;
@@ -234,6 +236,14 @@ int liveupdate_unregister_flb(struct liveupdate_file_handler *fh,
 
 int liveupdate_flb_get_incoming(struct liveupdate_flb *flb, void **objp);
 int liveupdate_flb_get_outgoing(struct liveupdate_flb *flb, void **objp);
+/* kernel can internally retrieve files */
+int liveupdate_get_file_incoming(struct liveupdate_session *s, u64 token,
+				 struct file **filep);
+
+int liveupdate_get_file_outgoing(struct liveupdate_session *s,
+				 struct file *file, u64 *tokenp);
+void liveupdate_put_file_outgoing(struct liveupdate_session *s,
+				 struct file *file, u64 token);
 
 #else /* CONFIG_LIVEUPDATE */
 
@@ -279,6 +289,23 @@ static inline int liveupdate_flb_get_outgoing(struct liveupdate_flb *flb,
 					      void **objp)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline int liveupdate_get_file_incoming(struct liveupdate_session *s,
+					       u64 token, struct file **filep)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int liveupdate_get_file_outgoing(struct liveupdate_session *s,
+					       struct file *file, u64 *tokenp)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void liveupdate_put_file_outgoing(struct liveupdate_session *s,
+					       struct file *file, u64 token)
+{
 }
 
 #endif /* CONFIG_LIVEUPDATE */
