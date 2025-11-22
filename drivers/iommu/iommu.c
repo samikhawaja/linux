@@ -2359,6 +2359,21 @@ int iommu_get_preserved_data(u64 token, const char *compatible,
 }
 EXPORT_SYMBOL(iommu_get_preserved_data);
 
+static void __iommu_domain_put_preserved_state(struct iommu_domain *domain)
+{
+	struct iommu_domain_ser *domain_ser;
+	struct iommu_ser *ser;
+
+	domain_ser = domain->preserved_state;
+	BUG_ON(liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser));
+	if (--domain->preserved_state->attach_count == 0) {
+		domain->preserved_state->idx = -1;
+		domain->preserved_state->restored_domain = NULL;
+		domain->preserved_state = NULL;
+	}
+	liveupdate_flb_incoming_unlock(&iommu_flb, ser);
+}
+
 int iommu_domain_preserve(struct iommu_domain *domain)
 {
 	struct iommu_domain_ser *domain_ser;
@@ -2544,24 +2559,44 @@ static void __iommu_group_set_core_domain(struct iommu_group *group)
 	__iommu_group_set_domain_nofail(group, new_domain);
 }
 
+static void __iommu_put_device_preserved_state(struct device_ser *device_ser)
+{
+	struct iommu_ser *ser;
+
+	BUG_ON(liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser));
+	BUG_ON(device_ser->data);
+
+	device_ser->devid = -1;
+	device_ser->pci_domain = -1;
+
+	liveupdate_flb_incoming_unlock(&iommu_flb, ser);
+}
+
 static int __iommu_attach_device(struct iommu_domain *domain,
 				 struct device *dev, struct iommu_domain *old)
 {
+	struct device_ser *device_ser;
+	bool preserved_dev = false;
 	int ret;
 
 	if (unlikely(domain->ops->attach_dev == NULL))
 		return -ENODEV;
 
+	preserved_dev = !iommu_get_device_preserved_data(dev, false, &device_ser);
+	if (preserved_dev && old->preserved_state)
+		return -EBUSY;
+
 	ret = domain->ops->attach_dev(domain, dev, old);
 	if (ret)
 		return ret;
 
-	if (domain->preserved_state && domain->preserved_state->restored_domain) {
-		domain->preserved_state->restore_count++;
-	}
-
-	if (old && old->preserved_state && old->preserved_state->restored_domain) {
-		domain->preserved_state->attach_count--;
+	preserved_dev = !iommu_get_device_preserved_data(dev, true, &device_ser);
+	if (old && preserved_dev && old->preserved_state &&
+	    old->preserved_state->restored_domain) {
+		__iommu_put_device_preserved_state(device_ser);
+		if (++old->preserved_state->swap_count == old->preserved_state->attach_count) {
+			__iommu_domain_put_preserved_state(domain);
+		}
 	}
 
 	dev->iommu->attach_deferred = 0;

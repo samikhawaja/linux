@@ -260,7 +260,7 @@ struct iommu_domain {
 struct iommu_domain_ser {
 	u64 idx;
 	u64 attach_count;
-	u64 restore_count;
+	u64 swap_count;
 	u64 data;
 	char compatible[64];
 	struct iommu_domain *restored_domain;
