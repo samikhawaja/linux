@@ -300,9 +300,34 @@ static void restore_used_domain_ids(struct intel_iommu *iommu, struct iommu_unit
 	}
 }
 
-int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu, void *iommu_ser)
+int intel_iommu_get_preserved_domain_id(struct dmar_domain *domain, struct intel_iommu *iommu)
 {
-	struct iommu_unit_ser *iser = iommu_ser;
+	struct iommu_unit_ser *iommu_ser;
+	struct iommu_domain_ser *domain_ser;
+	unsigned int count;
+	int id;
+
+	if (!iommu->iommu.preserved_state || !domain->domain.preserved_state)
+		return -EINVAL;
+
+	domain_ser = domain->domain.preserved_state;
+	iommu_ser = phys_to_virt(iommu->iommu.preserved_state->data);
+	for (count = 0; count < iommu_ser->count_domains; count++) {
+		if (iommu_ser->domains[count].domain_idx != domain_ser->idx)
+			continue;
+
+		id = iommu_ser->domains[count].did;
+		iommu_ser->domains[count].domain_idx = -1;
+		return id;
+	}
+
+	BUG_ON(-EINVAL);
+}
+
+int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
+					      struct iommu_device_ser *iommu_ser)
+{
+	struct iommu_unit_ser *iser = phys_to_virt(iommu_ser->data);
 	int ret;
 
 	if (!iommu_ser)
@@ -366,7 +391,7 @@ static int preserve_iommu_domain_attachment(struct device_domain_info *info)
 	int idx;
 
 	/* Do this in a lock */
-	iommu_ser = info->iommu->iommu.preserved_state->data;
+	iommu_ser = phys_to_virt(info->iommu->iommu.preserved_state->data);
 	if (iommu_ser->count_domains == iommu_ser->count_max_domains)
 		return -ENOSPC;
 
@@ -427,7 +452,7 @@ int intel_iommu_preserve(struct iommu_device *iommu_dev, struct iommu_device_ser
 	ser->count_max_domains = count_dids;
 	strncpy(iommu_device_ser->compatible, "intel", sizeof(iommu_device_ser->compatible));
 	iommu_device_ser->token = iommu->reg_phys;
-	iommu_device_ser->data = ser;
+	iommu_device_ser->data = virt_to_phys(ser);
 	spin_unlock(&iommu->lock);
 
 	return 0;
