@@ -261,9 +261,9 @@ struct iommu_domain_ser {
 	u64 idx;
 	u64 attach_count;
 	u64 restore_count;
-	void *data;
+	u64 data;
 	char compatible[64];
-	struct iommu_domain *live_domain;
+	struct iommu_domain *restored_domain;
 };
 
 struct device_ser {
@@ -271,14 +271,14 @@ struct device_ser {
 	u32 pci_domain;
 	u64 domain_idx;
 	u64 iommu_idx;
-	void *data;
+	u64 data;
 	char compatible_iommu[64];
 };
 
 struct iommu_device_ser {
 	u64 idx;
 	u64 token;
-	void *data;
+	u64 data;
 	char compatible[64];
 };
 #endif
@@ -955,8 +955,11 @@ extern int iommu_domain_unpreserve(struct iommu_domain *domain);
 extern int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
 extern int iommu_preserve_device(struct iommu_domain *domain, struct device *dev);
 extern int iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
-extern int iommu_get_preserved_data(struct iommu_device_ser *iommu_device_ser, bool incoming);
-extern int iommu_get_device_preserved_data(struct device_ser *iommu_device_ser, bool incoming);
+extern int iommu_get_preserved_data(u64 token, const char *compatible,
+				    bool incoming, struct iommu_device_ser **iommu_device_ser);
+extern int iommu_get_device_preserved_data(struct device *dev,
+					   bool incoming,
+					   struct device_ser **device_ser);
 extern struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool incoming);
 #endif
 

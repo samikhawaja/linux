@@ -667,12 +667,13 @@ pgtable_walk:
 #endif
 
 /* iommu handling */
-static int iommu_alloc_root_entry(struct intel_iommu *iommu, void *iommu_state)
+static int iommu_alloc_root_entry(struct intel_iommu *iommu)
 {
 	struct root_entry *root;
 
 #if CONFIG_LIVEUPDATE
-	if (!intel_iommu_liveupdate_restore_root_table(iommu, iommu_state) &&
+	if (iommu->iommu.preserved_state &&
+	    !intel_iommu_liveupdate_restore_root_table(iommu, iommu->iommu.preserved_state) &&
 	    iommu->root_entry) {
 		__iommu_flush_cache(iommu, iommu->root_entry, ROOT_SIZE);
 		return 0;
@@ -1027,13 +1028,16 @@ static bool first_level_by_default(struct intel_iommu *iommu)
 	return true;
 }
 
-int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu)
+int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu, bool restore)
 {
 	struct iommu_domain_info *info, *curr;
 	int num, ret = -ENOSPC;
 
 	if (domain->domain.type == IOMMU_DOMAIN_SVA)
 		return 0;
+
+	if (!domain->domain.preserved_state && restore)
+		return -EINVAL;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
@@ -1047,8 +1051,11 @@ int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu)
 		return 0;
 	}
 
-	num = ida_alloc_range(&iommu->domain_ida, IDA_START_DID,
-			      cap_ndoms(iommu->cap) - 1, GFP_KERNEL);
+	if (restore)
+		num = intel_iommu_get_preserved_domain_id(domain, iommu);
+	else
+		num = ida_alloc_range(&iommu->domain_ida, IDA_START_DID,
+				      cap_ndoms(iommu->cap) - 1, GFP_KERNEL);
 	if (num < 0) {
 		pr_err("%s: No free domain ids\n", iommu->name);
 		goto err_unlock;
@@ -1319,10 +1326,13 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
+	struct device_ser *device_ser;
 	unsigned long flags;
+	bool restore;
 	int ret;
 
-	ret = domain_attach_iommu(domain, iommu);
+	restore = !iommu_get_device_preserved_data(dev, true, &device_ser);
+	ret = domain_attach_iommu(domain, iommu, restore);
 	if (ret)
 		return ret;
 
@@ -1335,16 +1345,18 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 	if (dev_is_real_dma_subdevice(dev))
 		return 0;
 
-	if (!sm_supported(iommu))
-		ret = domain_context_mapping(domain, dev);
-	else if (intel_domain_is_fs_paging(domain))
-		ret = domain_setup_first_level(iommu, domain, dev,
-					       IOMMU_NO_PASID, NULL);
-	else if (intel_domain_is_ss_paging(domain))
-		ret = domain_setup_second_level(iommu, domain, dev,
-						IOMMU_NO_PASID, NULL);
-	else if (WARN_ON(true))
-		ret = -EINVAL;
+	if (!restore) {
+		if (!sm_supported(iommu))
+			ret = domain_context_mapping(domain, dev);
+		else if (intel_domain_is_fs_paging(domain))
+			ret = domain_setup_first_level(iommu, domain, dev,
+						       IOMMU_NO_PASID, NULL);
+		else if (intel_domain_is_ss_paging(domain))
+			ret = domain_setup_second_level(iommu, domain, dev,
+							IOMMU_NO_PASID, NULL);
+		else if (WARN_ON(true))
+			ret = -EINVAL;
+	}
 
 	if (ret)
 		goto out_block_translation;
@@ -1617,24 +1629,15 @@ out_unmap:
 }
 
 static int intel_iommu_get_preserved_data(struct intel_iommu *iommu,
-					  struct iommu_device_ser *iommu_ser,
+					  struct iommu_device_ser **iommu_ser,
 					  bool incoming)
 {
-	int ret;
-
-	iommu_ser->token = iommu->reg_phys;
-	strncpy(iommu_ser->compatible, "intel", sizeof(iommu_ser->compatible));
-
-	ret = iommu_get_preserved_data(iommu_ser, incoming);
-	if (ret)
-		iommu_ser->data = NULL;
-
-	return ret;
+	return iommu_get_preserved_data(iommu->reg_phys, "intel", incoming, iommu_ser);
 }
 
 static int __init init_dmars(void)
 {
-	struct iommu_device_ser iommu_ser;
+	struct iommu_device_ser *iommu_ser = NULL;
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu;
 	int ret;
@@ -1658,11 +1661,13 @@ static int __init init_dmars(void)
 		}
 
 #if IS_ENABLED(CONFIG_LIVEUPDATE)
-		intel_iommu_get_preserved_data(iommu, &iommu_ser, true);
+		ret = intel_iommu_get_preserved_data(iommu, &iommu_ser, true);
+		if (!ret)
+			iommu->iommu.preserved_state = iommu_ser;
 #endif
 
 		intel_iommu_init_qi(iommu);
-		init_translation_status(iommu, !!iommu_ser.data);
+		init_translation_status(iommu, !!iommu_ser);
 
 		if (translation_pre_enabled(iommu) && !is_kdump_kernel()) {
 			iommu_disable_translation(iommu);
@@ -1676,7 +1681,7 @@ static int __init init_dmars(void)
 		 * we could share the same root & context tables
 		 * among all IOMMU's. Need to Split it later.
 		 */
-		ret = iommu_alloc_root_entry(iommu, iommu_ser.data);
+		ret = iommu_alloc_root_entry(iommu);
 		if (ret)
 			goto free_iommu;
 
@@ -2135,7 +2140,7 @@ int dmar_parse_one_satc(struct acpi_dmar_header *hdr, void *arg)
 static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 {
 	struct intel_iommu *iommu = dmaru->iommu;
-	struct iommu_device_ser iommu_ser;
+	struct iommu_device_ser *iommu_ser;
 	int ret;
 
 	/*
@@ -2145,10 +2150,12 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 		iommu_disable_translation(iommu);
 
 #if IS_ENABLED(CONFIG_LIVEUPDATE)
-		intel_iommu_get_preserved_data(iommu, &iommu_ser, true);
+		ret = intel_iommu_get_preserved_data(iommu, &iommu_ser, true);
+		if (!ret)
+			iommu->iommu.preserved_state = iommu_ser;
 #endif
 
-	ret = iommu_alloc_root_entry(iommu, iommu_ser.data);
+	ret = iommu_alloc_root_entry(iommu);
 	if (ret)
 		goto out;
 
@@ -2396,7 +2403,7 @@ void intel_iommu_shutdown(void)
 {
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu = NULL;
-	struct iommu_device_ser iommu_ser;
+	struct iommu_device_ser *iommu_ser = NULL;
 
 	if (no_iommu || dmar_disabled)
 		return;
@@ -2926,7 +2933,7 @@ static const struct iommu_dirty_ops intel_second_stage_dirty_ops = {
 static void intel_iommu_clean_root_table(struct intel_iommu *iommu)
 {
 	struct device_domain_info *info;
-	struct device_ser device_ser;
+	struct device_ser *device_ser;
 	struct pci_dev *pdev = NULL;
 
 	for_each_pci_dev(pdev) {
@@ -2937,9 +2944,7 @@ static void intel_iommu_clean_root_table(struct intel_iommu *iommu)
 		if (info->iommu != iommu)
 			continue;
 
-		device_ser.devid = pci_dev_id(pdev);
-		device_ser.pci_domain = pci_domain_nr(pdev->bus);
-		if (!iommu_get_device_preserved_data(&device_ser, false))
+		if (!iommu_get_device_preserved_data(&pdev->dev, false, &device_ser))
 			continue;
 
 		domain_context_clear(info);
@@ -3627,7 +3632,7 @@ domain_add_dev_pasid(struct iommu_domain *domain,
 	if (!dev_pasid)
 		return ERR_PTR(-ENOMEM);
 
-	ret = domain_attach_iommu(dmar_domain, iommu);
+	ret = domain_attach_iommu(dmar_domain, iommu, false);
 	if (ret)
 		goto out_free;
 
