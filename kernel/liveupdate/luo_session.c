@@ -204,10 +204,11 @@ static int luo_session_release(struct inode *inodep, struct file *filep)
 {
 	struct luo_session *session = filep->private_data;
 	struct luo_session_header *sh;
+	int err;
 
 	/* If retrieved is set, it means this session is from incoming list */
 	if (session->retrieved) {
-		int err = luo_session_finish_one(session);
+		err = luo_session_finish_one(session);
 
 		if (err) {
 			pr_warn("Unable to finish session [%s] on release\n",
@@ -217,7 +218,12 @@ static int luo_session_release(struct inode *inodep, struct file *filep)
 		sh = &luo_session_global.incoming;
 	} else {
 		scoped_guard(mutex, &session->mutex)
-			luo_file_unpreserve_files(&session->file_set);
+		err = luo_file_unpreserve_files(&session->file_set);
+		if (err) {
+			pr_warn("Unable to unpreserve session [%s] on release\n",
+				session->name);
+			return err;
+		}
 		sh = &luo_session_global.outgoing;
 	}
 
