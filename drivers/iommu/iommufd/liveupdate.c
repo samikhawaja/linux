@@ -61,6 +61,7 @@ static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
 {
 	struct iommufd_hwpt_paging *hwpt, **hwpts = NULL;
 	struct iommufd_hwpt_lu *hwpt_lu;
+	struct iommufd_device *idev;
 	struct iommufd_object *obj;
 	unsigned int nr_hwpts = 0;
 	unsigned long index;
@@ -76,6 +77,10 @@ static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
 
 	xa_lock(&ictx->objects);
 	xa_for_each(&ictx->objects, index, obj) {
+		if (obj->type == IOMMUFD_OBJ_DEVICE) {
+			idev = container_of(obj, struct iommufd_device, obj);
+		}
+
 		if (obj->type != IOMMUFD_OBJ_HWPT_PAGING)
 			continue;
 
@@ -113,7 +118,7 @@ static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
 		/* iommu_domain_preserve may sleep and must be called
 		 * outside of xa_lock */
 		for (i = 0; i < nr_hwpts; i++) {
-			hwpt = hwpts[nr_hwpts];
+			hwpt = hwpts[i];
 			hwpt_lu = &iommufd_lu->hwpts[nr_hwpts];
 
 			hwpt_lu->iommu_hwpt_token =
@@ -123,6 +128,8 @@ static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
 				goto out;
 			}
 		}
+
+		iommu_preserve_device(hwpts[0]->common.domain, idev->dev);
 	}
 
 	rc = nr_hwpts;
@@ -156,8 +163,9 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	}
 
 	iommufd_lu = folio_address(folio_lu);
+	iommufd_lu->nr_hwpts = rc;
 	rc = iommufd_save_hwpts(ictx, iommufd_lu);
-	if (rc)
+	if (rc < 0)
 		goto err_folio_put;
 
 	rc = kho_preserve_folio(folio_lu);
