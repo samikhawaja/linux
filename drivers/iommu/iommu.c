@@ -2245,12 +2245,6 @@ static struct liveupdate_flb iommu_flb = {
 
 int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler)
 {
-	int ret;
-
-	ret = liveupdate_init_flb(&iommu_flb);
-	if (ret)
-		return ret;
-
 	return liveupdate_register_flb(handler, &iommu_flb);
 }
 EXPORT_SYMBOL(iommu_liveupdate_register_flb);
@@ -2275,19 +2269,14 @@ struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool in
 	int ret;
 
 	if (incoming)
-		ret = liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser);
 	else
-		ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
 
 	if (ret)
 		return ERR_PTR(ret);
 
 	domain_ser = &ser->domains_ser[domain_idx];
-	if (incoming)
-		liveupdate_flb_incoming_unlock(&iommu_flb, ser);
-	else
-		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
-
 	return domain_ser;
 }
 
@@ -2302,9 +2291,9 @@ int iommu_get_device_preserved_data(struct device *dev,
 		return -ENOTSUPP;
 
 	if (incoming)
-		ret = liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser);
 	else
-		ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
 
 	if (ret)
 		return ret;
@@ -2318,11 +2307,6 @@ int iommu_get_device_preserved_data(struct device *dev,
 		}
 	}
 
-	if (incoming)
-		liveupdate_flb_incoming_unlock(&iommu_flb, ser);
-	else
-		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
-
 	return ret;
 }
 EXPORT_SYMBOL(iommu_get_device_preserved_data);
@@ -2334,9 +2318,9 @@ int iommu_get_preserved_data(u64 token, const char *compatible,
 	int ret, i;
 
 	if (incoming)
-		ret = liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser);
 	else
-		ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
 
 	if (ret)
 		return ret;
@@ -2350,11 +2334,6 @@ int iommu_get_preserved_data(u64 token, const char *compatible,
 		}
 	}
 
-	if (incoming)
-		liveupdate_flb_incoming_unlock(&iommu_flb, ser);
-	else
-		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
-
 	return ret;
 }
 EXPORT_SYMBOL(iommu_get_preserved_data);
@@ -2365,13 +2344,12 @@ static void __iommu_domain_put_preserved_state(struct iommu_domain *domain)
 	struct iommu_ser *ser;
 
 	domain_ser = domain->preserved_state;
-	BUG_ON(liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser));
+	BUG_ON(liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser));
 	if (--domain->preserved_state->attach_count == 0) {
 		domain->preserved_state->idx = -1;
 		domain->preserved_state->restored_domain = NULL;
 		domain->preserved_state = NULL;
 	}
-	liveupdate_flb_incoming_unlock(&iommu_flb, ser);
 }
 
 int iommu_domain_preserve(struct iommu_domain *domain)
@@ -2383,19 +2361,17 @@ int iommu_domain_preserve(struct iommu_domain *domain)
 	if (!domain->ops->preserve)
 		return -EOPNOTSUPP;
 
-	ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
 	if (ret)
 		return ret;
 
 	if (ser->nr_domains == MAX_PRESERVED_OBJS) {
-		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 		return -ENOMEM;
 	}
 
 	idx = ser->nr_domains++;
 	domain_ser = &ser->domains_ser[idx];
 	domain_ser->idx = idx;
-	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 
 	ret = domain->ops->preserve(domain, domain_ser);
 	if (ret) {
@@ -2417,17 +2393,13 @@ int iommu_domain_unpreserve(struct iommu_domain *domain)
 	if (!domain->ops->unpreserve)
 		return -EOPNOTSUPP;
 
-	ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
 	if (ret)
 		return ret;
 
 	domain_ser = domain->preserved_state;
 	if (domain_ser->attach_count)
 		ret = -EBUSY;
-
-	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
-	if (ret)
-		return ret;
 
 	domain->ops->unpreserve(domain, domain_ser);
 	domain_ser->data = 0;
@@ -2445,19 +2417,17 @@ static int iommu_preserve(struct iommu_device *iommu)
 	if (!iommu->ops->preserve)
 		return -EOPNOTSUPP;
 
-	ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
 	if (ret)
 		return ret;
 
 	if (ser->nr_iommu_devices == MAX_PRESERVED_OBJS) {
-		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 		return -ENOMEM;
 	}
 
 	iommu_device_ser = &ser->iommu_devices_ser[ser->nr_iommu_devices];
 	iommu_device_ser->idx = ser->nr_iommu_devices++;
 	iommu->preserved_state = iommu_device_ser;
-	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 
 	ret = iommu->ops->preserve(iommu, iommu_device_ser);
 	if (ret)
@@ -2492,14 +2462,12 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 			return ret;
 	}
 
-	ret = liveupdate_flb_outgoing_locked(&iommu_flb, (void **) &ser);
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
 	if (ret)
 		return ret;
 
-	if (ser->nr_devices == MAX_PRESERVED_OBJS) {
-		liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
+	if (ser->nr_devices == MAX_PRESERVED_OBJS)
 		return -ENOMEM;
-	}
 
 	idx = ser->nr_devices++;
 	device_ser = &ser->devices_ser[idx];
@@ -2507,7 +2475,6 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 	device_ser->iommu_idx = iommu->iommu_dev->preserved_state->idx;
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain = pci_domain_nr(pdev->bus);
-	liveupdate_flb_outgoing_unlock(&iommu_flb, ser);
 
 	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
 	if (ret)
@@ -2563,13 +2530,11 @@ static void __iommu_put_device_preserved_state(struct device_ser *device_ser)
 {
 	struct iommu_ser *ser;
 
-	BUG_ON(liveupdate_flb_incoming_locked(&iommu_flb, (void **) &ser));
+	BUG_ON(liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser));
 	BUG_ON(device_ser->data);
 
 	device_ser->devid = -1;
 	device_ser->pci_domain = -1;
-
-	liveupdate_flb_incoming_unlock(&iommu_flb, ser);
 }
 
 static int __iommu_attach_device(struct iommu_domain *domain,
