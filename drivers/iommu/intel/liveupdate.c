@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
+
 /*
  * Copyright (C) 2025, Google LLC
  * Author: Samiullah Khawaja <skhawaja@google.com>
@@ -13,20 +14,6 @@
 
 #include "iommu.h"
 #include "../iommu-pages.h"
-
-struct iommu_domain_attachments
-{
-	u32 domain_idx;
-	u32 did;
-} __packed;
-
-struct iommu_unit_ser {
-	u64 phys_addr;
-	u64 root_table;
-	u64 count_max_domains;
-	u64 count_domains;
-	struct iommu_domain_attachments domains[0];
-} __packed;
 
 static void unpreserve_iommu_context(struct intel_iommu *iommu, int end)
 {
