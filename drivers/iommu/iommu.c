@@ -4,6 +4,7 @@
  * Author: Joerg Roedel <jroedel@suse.de>
  */
 
+#include "linux/gfp_types.h"
 #define pr_fmt(fmt)    "iommu: " fmt
 
 #include <linux/amba/bus.h>
@@ -22,6 +23,7 @@
 #include <linux/idr.h>
 #include <linux/err.h>
 #include <linux/kexec_handover.h>
+#include <linux/kho/abi/iommu.h>
 #include <linux/liveupdate.h>
 #include <linux/pci.h>
 #include <linux/pci-ats.h>
@@ -2096,19 +2098,6 @@ struct iommu_domain *iommu_paging_domain_alloc_flags(struct device *dev,
 EXPORT_SYMBOL_GPL(iommu_paging_domain_alloc_flags);
 
 #ifdef CONFIG_LIVEUPDATE
-#define MAX_PRESERVED_OBJS 256
-
-struct iommu_ser {
-	u64 nr_domains;
-	u64 domains_ser_phys;
-	struct iommu_domain_ser *domains_ser;
-	u64 nr_devices;
-	u64 devices_ser_phys;
-	struct device_ser *devices_ser;
-	u64 nr_iommu_devices;
-	u64 iommu_devices_ser_phys;
-	struct iommu_device_ser *iommu_devices_ser;
-};
 
 static struct folio *folio_alloc_preserved(size_t sz)
 {
@@ -2134,58 +2123,89 @@ static void preserved_folio_put(struct folio *folio)
 	folio_put(folio);
 }
 
-static void iommu_liveupdate_flb_free(struct iommu_ser *ser)
+static void iommu_liveupdate_restore_objs(u64 next)
 {
-	if (ser->domains_ser)
-		preserved_folio_put(virt_to_folio(ser->domains_ser));
+	struct iommu_objs_ser *objs;
 
-	if (ser->devices_ser)
-		preserved_folio_put(virt_to_folio(ser->devices_ser));
+	while (next) {
+		BUG_ON(!kho_restore_folio(next));
+		objs = __va(next);
+		next = objs->next_objs;
+	}
+}
 
-	if (ser->iommu_devices_ser)
-		preserved_folio_put(virt_to_folio(ser->devices_ser));
+static void iommu_liveupdate_free_objs(u64 next, bool incoming)
+{
+	struct iommu_objs_ser *objs;
 
-	preserved_folio_put(virt_to_folio(ser));
+	while (next) {
+		objs = __va(next);
+		next = objs->next_objs;
+
+		if (!incoming)
+			preserved_folio_put(virt_to_folio(objs));
+		else
+			folio_put(virt_to_folio(objs));
+	}
+}
+
+static void iommu_liveupdate_flb_free(struct iommu_lu_flb_obj *obj)
+{
+	if (obj->iommu_domains)
+		iommu_liveupdate_free_objs(obj->ser->iommu_domains_phys, false);
+
+	if (obj->devices)
+		iommu_liveupdate_free_objs(obj->ser->iommu_devices_phys, false);
+
+	if (obj->iommus)
+		iommu_liveupdate_free_objs(obj->ser->iommu_devices_phys, false);
+
+	preserved_folio_put(virt_to_folio(obj->ser));
 }
 
 static int iommu_liveupdate_flb_preserve(struct liveupdate_flb_op_args *argp) {
-	struct iommu_ser *ser = NULL;
+	struct iommu_lu_flb_obj *obj;
+	struct iommu_lu_flb_ser *ser;
 	struct folio *folio;
+
+	obj = kzalloc(sizeof(*obj), GFP_KERNEL);
+	if (!obj)
+		return -ENOMEM;
 
 	folio = folio_alloc_preserved(sizeof(*ser));
 	if (IS_ERR(folio))
-		return PTR_ERR(folio);
+		goto err_free;
 
 	ser = folio_address(folio);
+	obj->ser = ser;
 
-	folio =	folio_alloc_preserved(sizeof(struct iommu_domain_ser) *
-				      MAX_PRESERVED_OBJS);
+	folio =	folio_alloc_preserved(PAGE_SIZE);
 	if (IS_ERR(folio))
 		goto err_free;
 
-	ser->domains_ser = folio_address(folio);
-	ser->domains_ser_phys = virt_to_phys(ser->domains_ser);
-	folio =	folio_alloc_preserved(sizeof(struct device_ser) *
-				      MAX_PRESERVED_OBJS);
+	obj->iommu_domains = folio_address(folio);
+	ser->iommu_domains_phys = virt_to_phys(obj->iommu_domains);
+
+	folio =	folio_alloc_preserved(PAGE_SIZE);
 	if (IS_ERR(folio))
 		goto err_free;
 
-	ser->devices_ser = folio_address(folio);
-	ser->devices_ser_phys = virt_to_phys(ser->devices_ser);
-	folio =	folio_alloc_preserved(sizeof(struct iommu_device_ser) *
-				      MAX_PRESERVED_OBJS);
+	obj->devices = folio_address(folio);
+	ser->devices_phys = virt_to_phys(obj->devices);
+
+	folio =	folio_alloc_preserved(PAGE_SIZE);
 	if (IS_ERR(folio))
 		goto err_free;
 
-	ser->iommu_devices_ser = folio_address(folio);
-	ser->iommu_devices_ser_phys = virt_to_phys(ser->iommu_devices_ser);
+	obj->iommus = folio_address(folio);
+	ser->iommu_devices_phys = virt_to_phys(obj->iommus);
 
-	argp->obj = ser;
+	argp->obj = obj;
 	argp->data = virt_to_phys(ser);
 	return 0;
 
 err_free:
-	iommu_liveupdate_flb_free(ser);
+	iommu_liveupdate_flb_free(obj);
 	return PTR_ERR(folio);
 }
 
@@ -2196,37 +2216,43 @@ static void iommu_liveupdate_flb_unpreserve(struct liveupdate_flb_op_args *argp)
 
 static void iommu_liveupdate_flb_finish(struct liveupdate_flb_op_args *argp)
 {
-	struct iommu_ser *ser = argp->obj;
+	struct iommu_lu_flb_obj *obj = argp->obj;
 
-	if (ser->domains_ser)
-		folio_put(virt_to_folio(ser->domains_ser));
+	if (obj->iommu_domains)
+		iommu_liveupdate_free_objs(obj->ser->iommu_domains_phys, true);
 
-	if (ser->devices_ser)
-		folio_put(virt_to_folio(ser->devices_ser));
+	if (obj->devices)
+		iommu_liveupdate_free_objs(obj->ser->iommu_devices_phys, true);
 
-	if (ser->iommu_devices_ser)
-		folio_put(virt_to_folio(ser->devices_ser));
+	if (obj->iommus)
+		iommu_liveupdate_free_objs(obj->ser->iommu_devices_phys, true);
 
-	folio_put(virt_to_folio(ser));
+	folio_put(virt_to_folio(obj->ser));
 }
 
 static int iommu_liveupdate_flb_retrieve(struct liveupdate_flb_op_args *argp)
 {
-	struct iommu_ser *ser;
+	struct iommu_lu_flb_obj *obj;
+	struct iommu_lu_flb_ser *ser;
+
+	obj = kzalloc(sizeof(*obj), GFP_ATOMIC);
+	if (!obj)
+		return -ENOMEM;
 
 	BUG_ON(!kho_restore_folio(argp->data));
 	ser = phys_to_virt(argp->data);
+	obj->ser = ser;
 
-	BUG_ON(!kho_restore_folio(ser->domains_ser_phys));
-	ser->domains_ser = phys_to_virt(ser->domains_ser_phys);
+	iommu_liveupdate_restore_objs(ser->iommu_domains_phys);
+	obj->iommu_domains = phys_to_virt(ser->iommu_domains_phys);
 
-	BUG_ON(!kho_restore_folio(ser->devices_ser_phys));
-	ser->devices_ser = phys_to_virt(ser->devices_ser_phys);
+	iommu_liveupdate_restore_objs(ser->devices_phys);
+	obj->devices = phys_to_virt(ser->devices_phys);
 
-	BUG_ON(!kho_restore_folio(ser->iommu_devices_ser_phys));
-	ser->iommu_devices_ser = phys_to_virt(ser->iommu_devices_ser_phys);
+	iommu_liveupdate_restore_objs(ser->iommu_devices_phys);
+	obj->iommus = phys_to_virt(ser->iommu_devices_phys);
 
-	argp->obj = ser;
+	argp->obj = obj;
 
 	return 0;
 }
@@ -2255,86 +2281,96 @@ static inline bool device_ser_match(struct device_ser *match,
 	return match->devid == pci_dev_id(pdev) && match->pci_domain == pci_domain_nr(pdev->bus);
 }
 
-static inline bool iommu_device_ser_match(struct iommu_device_ser * iommu1,
-					  u64 token, const char *compatible)
-{
-	return iommu1->token == token &&
-			!strncmp(iommu1->compatible, compatible, sizeof(iommu1->compatible));
-}
-
 struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool incoming)
 {
-	struct iommu_domain_ser *domain_ser;
-	struct iommu_ser *ser;
+	struct iommu_domains_ser *domains;
+	struct iommu_lu_flb_obj *obj;
 	int ret;
 
 	if (incoming)
-		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &obj);
 	else
-		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &obj);
 
 	if (ret)
 		return ERR_PTR(ret);
 
-	domain_ser = &ser->domains_ser[domain_idx];
-	return domain_ser;
+	if (domain_idx >= obj->ser->nr_domains)
+		return ERR_PTR(-ENOENT);
+
+	domains = __va(obj->ser->iommu_domains_phys);
+	while (domains) {
+		if (domain_idx < MAX_IOMMU_DOMAIN_SERS)
+			return &domains->iommu_domains[domain_idx];
+
+		domain_idx -= MAX_IOMMU_DOMAIN_SERS;
+		domains = __va(domains->objs.next_objs);
+	}
+
+	return ERR_PTR(-ENOENT);
 }
 
 int iommu_get_device_preserved_data(struct device *dev,
 				    bool incoming,
 				    struct device_ser **device_ser)
 {
-	struct iommu_ser *ser;
-	int ret, i;
+	struct iommu_lu_flb_obj *obj;
+	struct devices_ser *devices;
+	int ret, i, idx;
 
 	if (!dev_is_pci(dev))
 		return -ENOTSUPP;
 
 	if (incoming)
-		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &obj);
 	else
-		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
+		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &obj);
 
 	if (ret)
 		return ret;
 
-	ret = -ENONET;
-	for (i = 0; i < ser->nr_devices; ++i) {
-		if (device_ser_match(&ser->devices_ser[i], to_pci_dev(dev))) {
-			*device_ser = &ser->devices_ser[i];
-			ret = 0;
-			break;
+	devices = __va(obj->ser->devices_phys);
+	for (i = 0, idx = 0; i < obj->ser->nr_devices; ++i, ++idx) {
+		if (idx >= MAX_DEVICE_SERS) {
+			devices = __va(devices->objs.next_objs);
+			idx = 0;
+		}
+
+		if (device_ser_match(&devices->devices[idx], to_pci_dev(dev))) {
+			*device_ser = &devices->devices[idx];
+			return 0;
 		}
 	}
 
-	return ret;
+	return -ENOENT;
 }
 EXPORT_SYMBOL(iommu_get_device_preserved_data);
 
-int iommu_get_preserved_data(u64 token, const char *compatible,
-			     bool incoming, struct iommu_device_ser **iommu_device_ser)
+int iommu_get_preserved_data(u64 token, enum iommu_lu_type type,
+			     struct iommu_ser **iommu_ser)
 {
-	struct iommu_ser *ser;
-	int ret, i;
+	struct iommu_lu_flb_obj *obj;
+	struct iommus_ser *iommus;
+	int ret, i, idx;
 
-	if (incoming)
-		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser);
-	else
-		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
-
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &obj);
 	if (ret)
 		return ret;
 
-	ret = -ENONET;
-	for (i = 0; i < ser->nr_iommu_devices; ++i) {
-		if (iommu_device_ser_match(&ser->iommu_devices_ser[i], token, compatible)) {
-			*iommu_device_ser = &ser->iommu_devices_ser[i];
-			ret = 0;
-			break;
+	iommus = __va(obj->ser->iommu_devices_phys);
+	for (i = 0, idx = 0; i < obj->ser->nr_iommus; ++i, ++idx) {
+		if (idx >= MAX_IOMMU_SERS) {
+			iommus = __va(iommus->objs.next_objs);
+			idx = 0;
+		}
+
+		if (iommus->iommus[idx].token == token && iommus->iommus[idx].type == type) {
+			*iommu_ser = &iommus->iommus[idx];
+			return 0;
 		}
 	}
 
-	return ret;
+	return -ENOENT;
 }
 EXPORT_SYMBOL(iommu_get_preserved_data);
 
@@ -2346,101 +2382,129 @@ static void __iommu_domain_put_preserved_state(struct iommu_domain *domain)
 	domain_ser = domain->preserved_state;
 	BUG_ON(liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser));
 	if (--domain->preserved_state->attach_count == 0) {
-		domain->preserved_state->idx = -1;
+		domain->preserved_state->obj.idx = -1;
 		domain->preserved_state->restored_domain = NULL;
 		domain->preserved_state = NULL;
 	}
 }
 
+static int reserve_obj_ser(struct iommu_objs_ser **objs_ptr, u64 max_objs)
+{
+	struct iommu_objs_ser *objs = *objs_ptr;
+	struct folio *folio;
+	int idx;
+
+	if (objs->nr_objs == max_objs) {
+		folio = folio_alloc_preserved(PAGE_SIZE);
+		if (!folio)
+			return -ENOMEM;
+
+		objs->next_objs = virt_to_phys(folio_address(folio));
+		objs = folio_address(folio);
+		*objs_ptr = objs;
+		objs->nr_objs = 0;
+	}
+
+	idx = objs->nr_objs++;
+	return idx;
+}
+
 int iommu_domain_preserve(struct iommu_domain *domain)
 {
 	struct iommu_domain_ser *domain_ser;
-	struct iommu_ser *ser;
-	int ret, idx;
+	struct iommu_lu_flb_obj *flb_obj;
+	int idx, ret;
 
 	if (!domain->ops->preserve)
 		return -EOPNOTSUPP;
 
-	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &flb_obj);
 	if (ret)
 		return ret;
 
-	if (ser->nr_domains == MAX_PRESERVED_OBJS) {
-		return -ENOMEM;
-	}
+	guard(mutex)(&flb_obj->lock);
+	idx = reserve_obj_ser((struct iommu_objs_ser **) &flb_obj->iommu_domains,
+			      MAX_IOMMU_DOMAIN_SERS);
+	if (idx < 0)
+		return idx;
 
-	idx = ser->nr_domains++;
-	domain_ser = &ser->domains_ser[idx];
-	domain_ser->idx = idx;
+	domain_ser = &flb_obj->iommu_domains->iommu_domains[idx];
+	idx = flb_obj->ser->nr_domains++;
+	domain_ser->obj.idx = idx;
+	domain_ser->obj.ref_count = 1;
 
 	ret = domain->ops->preserve(domain, domain_ser);
 	if (ret) {
-		domain_ser->data = 0;
+		domain_ser->obj.deleted = true;
 		return ret;
 	}
 
 	domain->preserved_state = domain_ser;
-	return domain_ser->idx;
+	return domain_ser->obj.idx;
 }
 EXPORT_SYMBOL_GPL(iommu_domain_preserve);
 
 int iommu_domain_unpreserve(struct iommu_domain *domain)
 {
 	struct iommu_domain_ser *domain_ser;
-	struct iommu_ser *ser;
+	struct iommu_lu_flb_obj *flb_obj;
 	int ret;
 
 	if (!domain->ops->unpreserve)
 		return -EOPNOTSUPP;
 
-	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &flb_obj);
 	if (ret)
 		return ret;
 
+	guard(mutex)(&flb_obj->lock);
 	domain_ser = domain->preserved_state;
 	if (domain_ser->attach_count)
 		ret = -EBUSY;
 
 	domain->ops->unpreserve(domain, domain_ser);
-	domain_ser->data = 0;
+	domain_ser->obj.deleted = true;
+	domain->preserved_state = NULL;
 
 	return 0;
 }
 EXPORT_SYMBOL_GPL(iommu_domain_unpreserve);
 
-static int iommu_preserve(struct iommu_device *iommu)
+static int iommu_preserve_locked(struct iommu_device *iommu)
 {
-	struct iommu_device_ser *iommu_device_ser;
-	struct iommu_ser *ser;
-	int ret;
+	struct iommu_lu_flb_obj *flb_obj;
+	struct iommu_ser *iommu_ser;
+	int idx, ret;
 
 	if (!iommu->ops->preserve)
 		return -EOPNOTSUPP;
 
-	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &flb_obj);
 	if (ret)
 		return ret;
 
-	if (ser->nr_iommu_devices == MAX_PRESERVED_OBJS) {
-		return -ENOMEM;
-	}
+	idx = reserve_obj_ser((struct iommu_objs_ser **) &flb_obj->iommus, MAX_IOMMU_SERS);
+	if (idx < 0)
+		return idx;
 
-	iommu_device_ser = &ser->iommu_devices_ser[ser->nr_iommu_devices];
-	iommu_device_ser->idx = ser->nr_iommu_devices++;
-	iommu->preserved_state = iommu_device_ser;
+	iommu_ser = &flb_obj->iommus->iommus[idx];
+	idx = flb_obj->ser->nr_iommus++;
+	iommu_ser->obj.idx = idx;
+	iommu_ser->obj.ref_count = 1;
 
-	ret = iommu->ops->preserve(iommu, iommu_device_ser);
+	ret = iommu->ops->preserve(iommu, iommu_ser);
 	if (ret)
-		iommu_device_ser->data = 0;
+		iommu_ser->obj.deleted = true;
 
+	iommu->outgoing_preserved_state = iommu_ser;
 	return ret;
 }
 
 int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 {
+	struct iommu_lu_flb_obj *flb_obj;
 	struct device_ser *device_ser;
 	struct dev_iommu *iommu;
-	struct iommu_ser *ser;
 	struct pci_dev *pdev;
 	int ret, idx;
 
@@ -2456,29 +2520,44 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 	    !iommu->iommu_dev->ops->preserve)
 		return -EOPNOTSUPP;
 
-	if (!iommu->iommu_dev->preserved_state) {
-		ret = iommu_preserve(iommu->iommu_dev);
-		if (ret)
-			return ret;
-	}
 
-	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &ser);
+	if (!iommu->iommu_dev->ops->preserve)
+		return -EOPNOTSUPP;
+
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &flb_obj);
 	if (ret)
 		return ret;
 
-	if (ser->nr_devices == MAX_PRESERVED_OBJS)
-		return -ENOMEM;
+	guard(mutex)(&flb_obj->lock);
+	idx = reserve_obj_ser((struct iommu_objs_ser **) &flb_obj->devices, MAX_IOMMU_SERS);
+	if (idx < 0)
+		return idx;
 
-	idx = ser->nr_devices++;
-	device_ser = &ser->devices_ser[idx];
-	device_ser->domain_idx = domain->preserved_state->idx;
-	device_ser->iommu_idx = iommu->iommu_dev->preserved_state->idx;
+	device_ser = &flb_obj->devices->devices[idx];
+	idx = flb_obj->ser->nr_devices++;
+	device_ser->obj.idx = idx;
+	device_ser->obj.ref_count = 1;
+
+	if (!iommu->iommu_dev->outgoing_preserved_state) {
+		ret = iommu_preserve_locked(iommu->iommu_dev);
+		if (ret) {
+			device_ser->obj.deleted = true;
+			return ret;
+		}
+	} else {
+		iommu->iommu_dev->outgoing_preserved_state->obj.ref_count++;
+	}
+
+	device_ser->domain_idx = domain->preserved_state->obj.idx;
+	device_ser->iommu_idx = iommu->iommu_dev->outgoing_preserved_state->obj.idx;
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain = pci_domain_nr(pdev->bus);
 
 	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
-	if (ret)
-		device_ser->data = 0;
+	if (ret) {
+		device_ser->obj.deleted = true;
+		/* iommu_unpreserve_locked(iommu->iommu_dev); */
+	}
 
 	domain->preserved_state->attach_count++;
 	return ret;
@@ -2528,11 +2607,6 @@ static void __iommu_group_set_core_domain(struct iommu_group *group)
 
 static void __iommu_put_device_preserved_state(struct device_ser *device_ser)
 {
-	struct iommu_ser *ser;
-
-	BUG_ON(liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser));
-	BUG_ON(device_ser->data);
-
 	device_ser->devid = -1;
 	device_ser->pci_domain = -1;
 }

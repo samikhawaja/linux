@@ -667,13 +667,13 @@ pgtable_walk:
 #endif
 
 /* iommu handling */
-static int iommu_alloc_root_entry(struct intel_iommu *iommu)
+static int iommu_alloc_root_entry(struct intel_iommu *iommu, struct iommu_ser *restored_state)
 {
 	struct root_entry *root;
 
 #if CONFIG_LIVEUPDATE
-	if (iommu->iommu.preserved_state &&
-	    !intel_iommu_liveupdate_restore_root_table(iommu, iommu->iommu.preserved_state) &&
+	if (restored_state &&
+	    !intel_iommu_liveupdate_restore_root_table(iommu, restored_state) &&
 	    iommu->root_entry) {
 		__iommu_flush_cache(iommu, iommu->root_entry, ROOT_SIZE);
 		return 0;
@@ -1028,7 +1028,8 @@ static bool first_level_by_default(struct intel_iommu *iommu)
 	return true;
 }
 
-int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu, bool restore)
+int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu,
+			struct device_domain_ser *ser)
 {
 	struct iommu_domain_info *info, *curr;
 	int num, ret = -ENOSPC;
@@ -1036,7 +1037,7 @@ int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu, b
 	if (domain->domain.type == IOMMU_DOMAIN_SVA)
 		return 0;
 
-	if (!domain->domain.preserved_state && restore)
+	if (!domain->domain.preserved_state && ser)
 		return -EINVAL;
 
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
@@ -1051,8 +1052,8 @@ int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu, b
 		return 0;
 	}
 
-	if (restore)
-		num = intel_iommu_get_preserved_domain_id(domain, iommu);
+	if (ser)
+		num = ser->did;
 	else
 		num = ida_alloc_range(&iommu->domain_ida, IDA_START_DID,
 				      cap_ndoms(iommu->cap) - 1, GFP_KERNEL);
@@ -1332,7 +1333,7 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 	int ret;
 
 	restore = !iommu_get_device_preserved_data(dev, true, &device_ser);
-	ret = domain_attach_iommu(domain, iommu, restore);
+	ret = domain_attach_iommu(domain, iommu, (restore ? &device_ser->domain_ser : NULL));
 	if (ret)
 		return ret;
 
@@ -1628,16 +1629,9 @@ out_unmap:
 	return ret;
 }
 
-static int intel_iommu_get_preserved_data(struct intel_iommu *iommu,
-					  struct iommu_device_ser **iommu_ser,
-					  bool incoming)
-{
-	return iommu_get_preserved_data(iommu->reg_phys, "intel", incoming, iommu_ser);
-}
-
 static int __init init_dmars(void)
 {
-	struct iommu_device_ser *iommu_ser = NULL;
+	struct iommu_ser *iommu_ser = NULL;
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu;
 	int ret;
@@ -1661,9 +1655,7 @@ static int __init init_dmars(void)
 		}
 
 #if IS_ENABLED(CONFIG_LIVEUPDATE)
-		ret = intel_iommu_get_preserved_data(iommu, &iommu_ser, true);
-		if (!ret)
-			iommu->iommu.preserved_state = iommu_ser;
+		iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL, &iommu_ser);
 #endif
 
 		intel_iommu_init_qi(iommu);
@@ -1681,7 +1673,7 @@ static int __init init_dmars(void)
 		 * we could share the same root & context tables
 		 * among all IOMMU's. Need to Split it later.
 		 */
-		ret = iommu_alloc_root_entry(iommu);
+		ret = iommu_alloc_root_entry(iommu, iommu_ser);
 		if (ret)
 			goto free_iommu;
 
@@ -2140,7 +2132,7 @@ int dmar_parse_one_satc(struct acpi_dmar_header *hdr, void *arg)
 static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 {
 	struct intel_iommu *iommu = dmaru->iommu;
-	struct iommu_device_ser *iommu_ser;
+	struct iommu_ser *iommu_ser = NULL;
 	int ret;
 
 	/*
@@ -2150,12 +2142,10 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 		iommu_disable_translation(iommu);
 
 #if IS_ENABLED(CONFIG_LIVEUPDATE)
-		ret = intel_iommu_get_preserved_data(iommu, &iommu_ser, true);
-		if (!ret)
-			iommu->iommu.preserved_state = iommu_ser;
+		iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL, &iommu_ser);
 #endif
 
-	ret = iommu_alloc_root_entry(iommu);
+	ret = iommu_alloc_root_entry(iommu, iommu_ser);
 	if (ret)
 		goto out;
 
@@ -2403,7 +2393,6 @@ void intel_iommu_shutdown(void)
 {
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu = NULL;
-	struct iommu_device_ser *iommu_ser = NULL;
 
 	if (no_iommu || dmar_disabled)
 		return;
@@ -2418,7 +2407,7 @@ void intel_iommu_shutdown(void)
 		/* Disable PMRs explicitly here. */
 		iommu_disable_protect_mem_regions(iommu);
 
-		if (!intel_iommu_get_preserved_data(iommu, &iommu_ser, false)) {
+		if (iommu->iommu.outgoing_preserved_state) {
 			intel_iommu_clean_root_table(iommu);
 		} else {
 			/* Make sure the IOMMUs are switched off */
@@ -3632,7 +3621,7 @@ domain_add_dev_pasid(struct iommu_domain *domain,
 	if (!dev_pasid)
 		return ERR_PTR(-ENOMEM);
 
-	ret = domain_attach_iommu(dmar_domain, iommu, false);
+	ret = domain_attach_iommu(dmar_domain, iommu, NULL);
 	if (ret)
 		goto out_free;
 
