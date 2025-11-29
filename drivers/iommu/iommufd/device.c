@@ -253,7 +253,7 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 			"Use the \"allow_unsafe_interrupts\" module parameter to override\n");
 	}
 
-	rc = iommu_device_claim_dma_owner(dev, ictx);
+	rc = iommu_device_claim_dma_owner(dev, ictx, dev->iommu->device_ser);
 	if (rc)
 		goto out_group_put;
 

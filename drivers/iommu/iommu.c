@@ -385,6 +385,9 @@ static struct dev_iommu *dev_iommu_get(struct device *dev)
 
 	mutex_init(&param->lock);
 	dev->iommu = param;
+#ifdef CONFIG_LIVEUPDATE
+	dev->iommu->device_ser = NULL;
+#endif
 	return param;
 }
 
@@ -488,6 +491,10 @@ static int iommu_init_device(struct device *dev)
 		goto err_module_put;
 	}
 	dev->iommu->iommu_dev = iommu_dev;
+
+#ifdef CONFIG_LIVEUPDATE
+	dev->iommu->device_ser = iommu_get_device_preserved_data(dev, true);
+#endif
 
 	ret = iommu_device_link(iommu_dev, dev);
 	if (ret)
@@ -2300,8 +2307,10 @@ struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool in
 
 	domains = __va(obj->ser->iommu_domains_phys);
 	while (domains) {
-		if (domain_idx < MAX_IOMMU_DOMAIN_SERS)
+		if (domain_idx < MAX_IOMMU_DOMAIN_SERS) {
+			domains->iommu_domains[domain_idx].obj.incoming = true;
 			return &domains->iommu_domains[domain_idx];
+		}
 
 		domain_idx -= MAX_IOMMU_DOMAIN_SERS;
 		domains = __va(domains->objs.next_objs);
@@ -2310,16 +2319,14 @@ struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool in
 	return ERR_PTR(-ENOENT);
 }
 
-int iommu_get_device_preserved_data(struct device *dev,
-				    bool incoming,
-				    struct device_ser **device_ser)
+struct device_ser* iommu_get_device_preserved_data(struct device *dev, bool incoming)
 {
 	struct iommu_lu_flb_obj *obj;
 	struct devices_ser *devices;
 	int ret, i, idx;
 
 	if (!dev_is_pci(dev))
-		return -ENOTSUPP;
+		return NULL;
 
 	if (incoming)
 		ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &obj);
@@ -2327,7 +2334,7 @@ int iommu_get_device_preserved_data(struct device *dev,
 		ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **) &obj);
 
 	if (ret)
-		return ret;
+		return NULL;
 
 	devices = __va(obj->ser->devices_phys);
 	for (i = 0, idx = 0; i < obj->ser->nr_devices; ++i, ++idx) {
@@ -2337,12 +2344,12 @@ int iommu_get_device_preserved_data(struct device *dev,
 		}
 
 		if (device_ser_match(&devices->devices[idx], to_pci_dev(dev))) {
-			*device_ser = &devices->devices[idx];
-			return 0;
+			devices->devices[idx].obj.incoming = incoming;
+			return &devices->devices[idx];
 		}
 	}
 
-	return -ENOENT;
+	return NULL;
 }
 EXPORT_SYMBOL(iommu_get_device_preserved_data);
 
@@ -2552,6 +2559,7 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 		/* iommu_unpreserve_locked(iommu->iommu_dev); */
 	}
 
+	dev->iommu->device_ser = device_ser;
 	domain->preserved_state->attach_count++;
 	return ret;
 }
@@ -2741,9 +2749,7 @@ static int __iommu_attach_group(struct iommu_domain *domain,
 	bool allow_replace = false;
 	struct device *dev;
 
-	allow_replace = !group->domain ||
-			(group->domain->preserved_state &&
-			 group->domain->preserved_state->restored_domain);
+	allow_replace = group->domain && iommu_domain_restored_state(group->domain);
 	if (!allow_replace && group->domain &&
 	    group->domain != group->default_domain &&
 	    group->domain != group->blocking_domain)
@@ -3473,9 +3479,9 @@ EXPORT_SYMBOL_GPL(iommu_fwspec_add_ids);
 static struct iommu_domain *__iommu_group_restore_domain(struct iommu_group *group)
 {
 	struct iommu_domain_ser *domain_ser;
+	struct iommu_lu_flb_obj *flb_obj;
 	struct device_ser *device_ser;
 	struct iommu_domain *domain;
-	struct pci_dev *pdev;
 	struct device *dev;
 	int ret;
 
@@ -3483,18 +3489,21 @@ static struct iommu_domain *__iommu_group_restore_domain(struct iommu_group *gro
 	if (!dev_is_pci(dev))
 		return ERR_PTR(-ENOENT);
 
-	pdev = to_pci_dev(dev);
-	ret = iommu_get_device_preserved_data(dev, true, &device_ser);
-	if (ret)
-		return ERR_PTR(ret);
+	device_ser = dev_iommu_restored_state(dev);
+	if (!device_ser)
+		return ERR_PTR(-ENOENT);
 
 	domain_ser = iommu_get_domain_preserved_data(device_ser->domain_idx, true);
 	if (IS_ERR(domain_ser))
 		return ERR_PTR(PTR_ERR(domain_ser));
 
-	if (domain_ser->restored_domain) {
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &flb_obj);
+	if (ret)
+		return ERR_PTR(ret);
+
+	guard(mutex)(&flb_obj->lock);
+	if (domain_ser->restored_domain)
 		return domain_ser->restored_domain;
-	}
 
 	domain = iommu_paging_domain_alloc(dev);
 	if (IS_ERR(domain))
@@ -3768,17 +3777,11 @@ static int __iommu_group_alloc_blocking_domain(struct iommu_group *group)
 	return 0;
 }
 
-static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner)
+static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner, bool transfer)
 {
-	struct device_ser *device_ser;
-	bool restored = false;
 	int ret;
 
-	if (!iommu_get_device_preserved_data(iommu_group_first_dev(group),
-					     true, &device_ser))
-		restored = true;
-
-	if (!restored && ((group->domain && group->domain != group->default_domain) ||
+	if (!transfer && ((group->domain && group->domain != group->default_domain) ||
 	    !xa_empty(&group->pasid_array)))
 		return -EBUSY;
 
@@ -3786,7 +3789,7 @@ static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner)
 	if (ret)
 		return ret;
 
-	if (!restored) {
+	if (!transfer) {
 		ret = __iommu_group_set_domain(group, group->blocking_domain);
 		if (ret)
 			return ret;
@@ -3819,7 +3822,7 @@ int iommu_group_claim_dma_owner(struct iommu_group *group, void *owner)
 		goto unlock_out;
 	}
 
-	ret = __iommu_take_dma_ownership(group, owner);
+	ret = __iommu_take_dma_ownership(group, owner, false);
 unlock_out:
 	mutex_unlock(&group->mutex);
 
@@ -3831,15 +3834,18 @@ EXPORT_SYMBOL_GPL(iommu_group_claim_dma_owner);
  * iommu_device_claim_dma_owner() - Set DMA ownership of a device
  * @dev: The device.
  * @owner: Caller specified pointer. Used for exclusive ownership.
+ * @ser: Restored state from previous kernel
  *
  * Claim the DMA ownership of a device. Multiple devices in the same group may
  * concurrently claim ownership if they present the same owner value. Returns 0
  * on success and error code on failure
  */
-int iommu_device_claim_dma_owner(struct device *dev, void *owner)
+int iommu_device_claim_dma_owner(struct device *dev, void *owner, struct device_ser *ser)
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
+	struct device_ser *restored_state;
+	bool transfer = false;
 	int ret = 0;
 
 	if (WARN_ON(!owner))
@@ -3858,7 +3864,16 @@ int iommu_device_claim_dma_owner(struct device *dev, void *owner)
 		goto unlock_out;
 	}
 
-	ret = __iommu_take_dma_ownership(group, owner);
+#ifdef CONFIG_LIVEUPDATE
+	restored_state = dev_iommu_restored_state(dev);
+	if (!ser ^ !restored_state)
+		return -EINVAL;
+
+	if (ser && ser == restored_state)
+		transfer = true;
+#endif
+
+	ret = __iommu_take_dma_ownership(group, owner, transfer);
 unlock_out:
 	mutex_unlock(&group->mutex);
 	return ret;

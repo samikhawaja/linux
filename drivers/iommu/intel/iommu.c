@@ -1049,7 +1049,7 @@ int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu,
 		return 0;
 	}
 
-	if (ser && domain->domain.preserved_state) {
+	if (ser && iommu_domain_restored_state(&domain->domain)) {
 		num = ida_alloc_range(&iommu->domain_ida, ser->did,
 				      ser->did, GFP_KERNEL);
 	} else {
@@ -1326,13 +1326,16 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
-	struct device_ser *device_ser;
+	struct device_ser *device_ser = NULL;
 	unsigned long flags;
-	bool restore;
 	int ret;
 
-	restore = !iommu_get_device_preserved_data(dev, true, &device_ser);
-	ret = domain_attach_iommu(domain, iommu, (restore ? &device_ser->domain_ser : NULL));
+#ifdef CONFIG_LIVEUPDATE
+	device_ser = dev_iommu_restored_state(dev);
+#endif
+
+	ret = domain_attach_iommu(domain, iommu,
+				  (device_ser ? &device_ser->domain_ser : NULL));
 	if (ret)
 		return ret;
 
@@ -1345,7 +1348,7 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 	if (dev_is_real_dma_subdevice(dev))
 		return 0;
 
-	if (!restore) {
+	if (!device_ser) {
 		if (!sm_supported(iommu))
 			ret = domain_context_mapping(domain, dev);
 		else if (intel_domain_is_fs_paging(domain))
@@ -2921,7 +2924,6 @@ static const struct iommu_dirty_ops intel_second_stage_dirty_ops = {
 static void intel_iommu_clean_root_table(struct intel_iommu *iommu)
 {
 	struct device_domain_info *info;
-	struct device_ser *device_ser;
 	struct pci_dev *pdev = NULL;
 
 	for_each_pci_dev(pdev) {
@@ -2932,7 +2934,7 @@ static void intel_iommu_clean_root_table(struct intel_iommu *iommu)
 		if (info->iommu != iommu)
 			continue;
 
-		if (!iommu_get_device_preserved_data(&pdev->dev, false, &device_ser))
+		if (dev_iommu_preserved_state(&pdev->dev))
 			continue;
 
 		domain_context_clear(info);
