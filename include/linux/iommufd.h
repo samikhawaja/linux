@@ -72,6 +72,11 @@ void iommufd_device_detach(struct iommufd_device *idev, ioasid_t pasid);
 struct iommufd_ctx *iommufd_device_to_ictx(struct iommufd_device *idev);
 u32 iommufd_device_to_id(struct iommufd_device *idev);
 
+#ifdef CONFIG_LIVEUPDATE
+/* TODO Add support for pasids. */
+int iommufd_device_preserve(struct iommufd_device *idev);
+void iommufd_device_unpreserve(struct iommufd_device *idev);
+#endif
 struct iommufd_access_ops {
 	u8 needs_pin_pages : 1;
 	void (*unmap)(void *data, unsigned long iova, unsigned long length);
