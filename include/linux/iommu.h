@@ -252,6 +252,7 @@ struct iommu_domain {
 		};
 	};
 
+	atomic_t attach_count;
 #ifdef CONFIG_LIVEUPDATE
 	struct iommu_domain_ser *preserved_state;
 #endif
@@ -926,6 +927,7 @@ static inline struct iommu_domain *iommu_paging_domain_alloc(struct device *dev)
 }
 
 #ifdef CONFIG_LIVEUPDATE
+extern bool iommu_domain_has_attachments(struct iommu_domain *domain);
 extern int iommu_domain_preserve(struct iommu_domain *domain);
 extern int iommu_domain_unpreserve(struct iommu_domain *domain);
 extern int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
