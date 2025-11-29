@@ -920,35 +920,6 @@ int DOMAIN_NS(map_pages)(struct iommu_domain *domain, unsigned long iova,
 }
 EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(map_pages), "GENERIC_PT_IOMMU");
 
-struct iommu_pt_ser {
-	u64 top_table;
-	u64 top_level;
-};
-
-static struct folio *folio_alloc_preserved(size_t sz)
-{
-	struct folio *folio;
-	int ret;
-
-	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, get_order(sz));
-	if (!folio)
-		return ERR_PTR(-ENOMEM);
-
-	ret = kho_preserve_folio(folio);
-	if (ret) {
-		folio_put(folio);
-		folio = ERR_PTR(ret);
-	}
-
-	return folio;
-}
-
-static void preserved_folio_put(struct folio *folio)
-{
-	kho_unpreserve_folio(folio);
-	folio_put(folio);
-}
-
 /**
  * unpreserve() - Unpreserve page tables and other state of a domain.
  * @domain: Domain to unpreserve
@@ -966,7 +937,6 @@ void DOMAIN_NS(unpreserve)(struct iommu_domain *domain, struct iommu_domain_ser 
 	iommu_pages_list_add(&collect.free_list, range.top_table);
 	pt_walk_range(&range, __collect_tables, &collect);
 
-	preserved_folio_put(virt_to_folio(phys_to_virt(ser->data)));
 	iommu_unpreserve_pages(&collect.free_list, -1);
 }
 EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(unpreserve), "GENERIC_PT_IOMMU");
@@ -986,33 +956,21 @@ int DOMAIN_NS(preserve)(struct iommu_domain *domain, struct iommu_domain_ser *se
 	struct pt_iommu_collect_args collect = {
 		.free_list = IOMMU_PAGES_LIST_INIT(collect.free_list),
 	};
-	struct iommu_pt_ser *pt_ser;
-	struct folio *folio;
 	int ret;
 
 	iommu_pages_list_add(&collect.free_list, range.top_table);
 	pt_walk_range(&range, __collect_tables, &collect);
 
-	folio = folio_alloc_preserved(sizeof(*pt_ser));
-	if (!folio)
-		return -ENOMEM;
-
-	pt_ser = folio_address(folio);
-	ser->data = virt_to_phys(pt_ser);
-
 	ret = iommu_preserve_pages(&collect.free_list);
 	if (ret) {
 		iommu_unpreserve_pages(&collect.free_list, -1);
-		goto preserve_err;
+		return ret;
 	}
 
-	pt_ser->top_table = virt_to_phys(range.top_table);
-	pt_ser->top_level = range.top_level;
+	ser->top_table = virt_to_phys(range.top_table);
+	ser->top_level = range.top_level;
 
 	return 0;
-preserve_err:
-	preserved_folio_put(folio);
-        return ret;
 }
 EXPORT_SYMBOL_NS_GPL(DOMAIN_NS(preserve), "GENERIC_PT_IOMMU");
 
@@ -1046,26 +1004,19 @@ int DOMAIN_NS(restore)(struct iommu_domain *domain, struct iommu_domain_ser *ser
 	struct pt_iommu *iommu_table =
 		container_of(domain, struct pt_iommu, domain);
 	struct pt_common *common = common_from_iommu(iommu_table);
-	struct iommu_pt_ser *pt_ser;
 	struct pt_range range;
 
-	pt_ser = phys_to_virt(ser->data);
-	BUG_ON(!pt_ser);
-	BUG_ON(!kho_restore_folio(ser->data));
-	iommu_restore_page(pt_ser->top_table);
+	iommu_restore_page(ser->top_table);
 
 	/* Free new table */
 	iommu_free_pages(range.top_table);
 
 	/* Set the restored top table */
-	pt_top_set(common, phys_to_virt(pt_ser->top_table), pt_ser->top_level);
+	pt_top_set(common, phys_to_virt(ser->top_table), ser->top_level);
 
 	/* Collect all pages*/
 	range = pt_all_range(common);
 	pt_walk_range(&range, __restore_tables, NULL);
-
-	folio_put(virt_to_folio(pt_ser));
-	ser->data = 0;
 
 	return 0;
 }

@@ -16,6 +16,7 @@
 #include <linux/of.h>
 #include <linux/iova_bitmap.h>
 #include <linux/atomic.h>
+#include <linux/kho/abi/iommu.h>
 #include <uapi/linux/iommufd.h>
 
 #define IOMMU_READ	(1 << 0)
@@ -255,33 +256,6 @@ struct iommu_domain {
 	struct iommu_domain_ser *preserved_state;
 #endif
 };
-
-#ifdef CONFIG_LIVEUPDATE
-struct iommu_domain_ser {
-	u64 idx;
-	u64 attach_count;
-	u64 swap_count;
-	u64 data;
-	char compatible[64];
-	struct iommu_domain *restored_domain;
-};
-
-struct device_ser {
-	u32 devid;
-	u32 pci_domain;
-	u64 domain_idx;
-	u64 iommu_idx;
-	u64 data;
-	char compatible_iommu[64];
-};
-
-struct iommu_device_ser {
-	u64 idx;
-	u64 token;
-	u64 data;
-	char compatible[64];
-};
-#endif
 
 static inline bool iommu_is_dma_domain(struct iommu_domain *domain)
 {
@@ -738,8 +712,8 @@ struct iommu_ops {
 
 	int (*preserve_device)(struct device *dev, struct device_ser *device_ser);
 	void (*unpreserve_device)(struct device *dev, struct device_ser *device_ser);
-	int (*preserve)(struct iommu_device *iommu, struct iommu_device_ser *iommu_ser);
-	void (*unpreserve)(struct iommu_device *iommu, struct iommu_device_ser *iommu_ser);
+	int (*preserve)(struct iommu_device *iommu, struct iommu_ser *iommu_ser);
+	void (*unpreserve)(struct iommu_device *iommu, struct iommu_ser *iommu_ser);
 
 	const struct iommu_domain_ops *default_domain_ops;
 	struct module *owner;
@@ -833,6 +807,8 @@ struct iommu_domain_ops {
  * @singleton_group: Used internally for drivers that have only one group
  * @max_pasids: number of supported PASIDs
  * @ready: set once iommu_device_register() has completed successfully
+ * @outgoing_preserved_state: preserved iommu state of outgoing kernel for
+ * liveupdate.
  */
 struct iommu_device {
 	struct list_head list;
@@ -842,7 +818,7 @@ struct iommu_device {
 	struct iommu_group *singleton_group;
 	u32 max_pasids;
 	bool ready;
-	struct iommu_device_ser *preserved_state;
+	struct iommu_ser *outgoing_preserved_state;
 };
 
 /**
@@ -955,8 +931,8 @@ extern int iommu_domain_unpreserve(struct iommu_domain *domain);
 extern int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
 extern int iommu_preserve_device(struct iommu_domain *domain, struct device *dev);
 extern int iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
-extern int iommu_get_preserved_data(u64 token, const char *compatible,
-				    bool incoming, struct iommu_device_ser **iommu_device_ser);
+extern int iommu_get_preserved_data(u64 token, enum iommu_lu_type type,
+				    struct iommu_ser **iommu_ser);
 extern int iommu_get_device_preserved_data(struct device *dev,
 					   bool incoming,
 					   struct device_ser **device_ser);
