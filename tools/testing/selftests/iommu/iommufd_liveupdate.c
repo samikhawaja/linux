@@ -116,7 +116,6 @@ int restore_iommufd(int iommufd, int cdev_fd, int hwpt_token)
 	ret = ioctl(iommufd, IOMMU_IOAS_ALLOC, &alloc_data);
 	ksft_assert(!ret);
 
-	restore.pt_id = alloc_data.out_ioas_id;
 	ret = ioctl(iommufd, IOMMU_HWPT_LU_RESTORE, &restore);
 	ksft_assert(!ret);
 

@@ -2401,7 +2401,7 @@ bool iommu_domain_has_attachments(struct iommu_domain *domain)
 }
 EXPORT_SYMBOL_GPL(iommu_domain_has_attachments);
 
-int iommu_domain_preserve(struct iommu_domain *domain)
+int iommu_domain_preserve(struct iommu_domain *domain, struct iommu_domain_ser **ser)
 {
 	struct iommu_domain_ser *domain_ser;
 	struct iommu_lu_flb_obj *flb_obj;
@@ -2432,7 +2432,8 @@ int iommu_domain_preserve(struct iommu_domain *domain)
 	}
 
 	domain->preserved_state = domain_ser;
-	return domain_ser->obj.idx;
+	*ser = domain_ser;
+	return 0;
 }
 EXPORT_SYMBOL_GPL(iommu_domain_preserve);
 
@@ -2737,9 +2738,14 @@ static bool domain_iommu_ops_compatible(const struct iommu_ops *ops,
 static int __iommu_attach_group(struct iommu_domain *domain,
 				struct iommu_group *group)
 {
+	bool allow_replace = false;
 	struct device *dev;
 
-	if (group->domain && group->domain != group->default_domain &&
+	allow_replace = !group->domain ||
+			(group->domain->preserved_state &&
+			 group->domain->preserved_state->restored_domain);
+	if (!allow_replace && group->domain &&
+	    group->domain != group->default_domain &&
 	    group->domain != group->blocking_domain)
 		return -EBUSY;
 
@@ -3776,10 +3782,11 @@ static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner)
 	    !xa_empty(&group->pasid_array)))
 		return -EBUSY;
 
+	ret = __iommu_group_alloc_blocking_domain(group);
+	if (ret)
+		return ret;
+
 	if (!restored) {
-		ret = __iommu_group_alloc_blocking_domain(group);
-		if (ret)
-			return ret;
 		ret = __iommu_group_set_domain(group, group->blocking_domain);
 		if (ret)
 			return ret;
