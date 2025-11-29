@@ -874,7 +874,60 @@ struct dev_iommu {
 	u32				pci_32bit_workaround:1;
 	u32				require_direct:1;
 	u32				shadow_on_flush:1;
+#ifdef CONFIG_LIVEUPDATE
+	struct device_ser		*device_ser;
+#endif
 };
+
+#ifdef CONFIG_LIVEUPDATE
+static inline void* dev_iommu_preserved_state(struct device *dev)
+{
+	struct device_ser *ser;
+
+	ser = dev->iommu->device_ser;
+	if (ser && !ser->obj.incoming)
+		return ser;
+
+	return NULL;
+}
+
+static inline void* dev_iommu_restored_state(struct device *dev)
+{
+	struct device_ser *ser;
+
+	ser = dev->iommu->device_ser;
+	if (ser && ser->obj.incoming)
+		return ser;
+
+	return NULL;
+}
+
+static inline void* iommu_domain_restored_state(struct iommu_domain *domain)
+{
+	struct iommu_domain_ser *ser;
+
+	ser = domain->preserved_state;
+	if (ser && ser->obj.incoming)
+		return ser;
+
+	return NULL;
+}
+#else
+static inline void* dev_iommu_preserved_state(struct device *dev)
+{
+	return NULL;
+}
+
+static inline void* dev_iommu_restored_state(struct device *dev)
+{
+	return NULL;
+}
+
+static inline void* iommu_domain_restored_state(struct iommu_domain *domain)
+{
+	return NULL;
+}
+#endif
 
 int iommu_device_register(struct iommu_device *iommu,
 			  const struct iommu_ops *ops,
@@ -935,9 +988,8 @@ extern int iommu_preserve_device(struct iommu_domain *domain, struct device *dev
 extern int iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
 extern int iommu_get_preserved_data(u64 token, enum iommu_lu_type type,
 				    struct iommu_ser **iommu_ser);
-extern int iommu_get_device_preserved_data(struct device *dev,
-					   bool incoming,
-					   struct device_ser **device_ser);
+extern struct device_ser* iommu_get_device_preserved_data(struct device *dev,
+							  bool incoming);
 extern struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool incoming);
 #endif
 
@@ -1214,7 +1266,7 @@ int iommu_group_claim_dma_owner(struct iommu_group *group, void *owner);
 void iommu_group_release_dma_owner(struct iommu_group *group);
 bool iommu_group_dma_owner_claimed(struct iommu_group *group);
 
-int iommu_device_claim_dma_owner(struct device *dev, void *owner);
+int iommu_device_claim_dma_owner(struct device *dev, void *owner, struct device_ser *ser);
 void iommu_device_release_dma_owner(struct device *dev);
 
 int iommu_attach_device_pasid(struct iommu_domain *domain,
