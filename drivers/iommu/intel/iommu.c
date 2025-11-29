@@ -1037,9 +1037,6 @@ int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu,
 	if (domain->domain.type == IOMMU_DOMAIN_SVA)
 		return 0;
 
-	if (!domain->domain.preserved_state && ser)
-		return -EINVAL;
-
 	info = kzalloc(sizeof(*info), GFP_KERNEL);
 	if (!info)
 		return -ENOMEM;
@@ -1052,11 +1049,13 @@ int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu,
 		return 0;
 	}
 
-	if (ser)
-		num = ser->did;
-	else
+	if (ser && domain->domain.preserved_state) {
+		num = ida_alloc_range(&iommu->domain_ida, ser->did,
+				      ser->did, GFP_KERNEL);
+	} else {
 		num = ida_alloc_range(&iommu->domain_ida, IDA_START_DID,
 				      cap_ndoms(iommu->cap) - 1, GFP_KERNEL);
+	}
 	if (num < 0) {
 		pr_err("%s: No free domain ids\n", iommu->name);
 		goto err_unlock;

@@ -162,10 +162,12 @@ static int luo_flb_retrieve_one(struct liveupdate_flb *flb)
 		return -ENODATA;
 
 	for (int i = 0; i < fh->header_ser->count; i++) {
-		if (!strcmp(fh->ser[i].name, flb->compatible)) {
+		if (!strcmp(fh->ser[i].name, flb->compatible) &&
+		    fh->ser[i].data) {
 			private->incoming.data = fh->ser[i].data;
 			private->incoming.count = fh->ser[i].count;
 			found = true;
+			fh->ser[i].data = 0;
 			break;
 		}
 	}

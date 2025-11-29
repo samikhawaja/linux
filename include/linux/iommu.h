@@ -928,7 +928,7 @@ static inline struct iommu_domain *iommu_paging_domain_alloc(struct device *dev)
 
 #ifdef CONFIG_LIVEUPDATE
 extern bool iommu_domain_has_attachments(struct iommu_domain *domain);
-extern int iommu_domain_preserve(struct iommu_domain *domain);
+extern int iommu_domain_preserve(struct iommu_domain *domain, struct iommu_domain_ser **ser);
 extern int iommu_domain_unpreserve(struct iommu_domain *domain);
 extern int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
 extern int iommu_preserve_device(struct iommu_domain *domain, struct device *dev);
