@@ -4,7 +4,6 @@
  * Author: Joerg Roedel <jroedel@suse.de>
  */
 
-#include "linux/gfp_types.h"
 #define pr_fmt(fmt)    "iommu: " fmt
 
 #include <linux/amba/bus.h>
@@ -2045,6 +2044,7 @@ static void iommu_domain_init(struct iommu_domain *domain, unsigned int type,
 {
 	domain->type = type;
 	domain->owner = ops;
+	atomic_set(&domain->attach_count, 0);
 	if (!domain->ops)
 		domain->ops = ops->default_domain_ops;
 }
@@ -2374,20 +2374,6 @@ int iommu_get_preserved_data(u64 token, enum iommu_lu_type type,
 }
 EXPORT_SYMBOL(iommu_get_preserved_data);
 
-static void __iommu_domain_put_preserved_state(struct iommu_domain *domain)
-{
-	struct iommu_domain_ser *domain_ser;
-	struct iommu_ser *ser;
-
-	domain_ser = domain->preserved_state;
-	BUG_ON(liveupdate_flb_get_incoming(&iommu_flb, (void **) &ser));
-	if (--domain->preserved_state->attach_count == 0) {
-		domain->preserved_state->obj.idx = -1;
-		domain->preserved_state->restored_domain = NULL;
-		domain->preserved_state = NULL;
-	}
-}
-
 static int reserve_obj_ser(struct iommu_objs_ser **objs_ptr, u64 max_objs)
 {
 	struct iommu_objs_ser *objs = *objs_ptr;
@@ -2408,6 +2394,12 @@ static int reserve_obj_ser(struct iommu_objs_ser **objs_ptr, u64 max_objs)
 	idx = objs->nr_objs++;
 	return idx;
 }
+
+bool iommu_domain_has_attachments(struct iommu_domain *domain)
+{
+	return atomic_read(&domain->attach_count) != 0;
+}
+EXPORT_SYMBOL_GPL(iommu_domain_has_attachments);
 
 int iommu_domain_preserve(struct iommu_domain *domain)
 {
@@ -2605,38 +2597,21 @@ static void __iommu_group_set_core_domain(struct iommu_group *group)
 	__iommu_group_set_domain_nofail(group, new_domain);
 }
 
-static void __iommu_put_device_preserved_state(struct device_ser *device_ser)
-{
-	device_ser->devid = -1;
-	device_ser->pci_domain = -1;
-}
-
 static int __iommu_attach_device(struct iommu_domain *domain,
 				 struct device *dev, struct iommu_domain *old)
 {
-	struct device_ser *device_ser;
-	bool preserved_dev = false;
 	int ret;
 
 	if (unlikely(domain->ops->attach_dev == NULL))
 		return -ENODEV;
 
-	preserved_dev = !iommu_get_device_preserved_data(dev, false, &device_ser);
-	if (preserved_dev && old->preserved_state)
-		return -EBUSY;
-
 	ret = domain->ops->attach_dev(domain, dev, old);
 	if (ret)
 		return ret;
 
-	preserved_dev = !iommu_get_device_preserved_data(dev, true, &device_ser);
-	if (old && preserved_dev && old->preserved_state &&
-	    old->preserved_state->restored_domain) {
-		__iommu_put_device_preserved_state(device_ser);
-		if (++old->preserved_state->swap_count == old->preserved_state->attach_count) {
-			__iommu_domain_put_preserved_state(domain);
-		}
-	}
+	atomic_inc(&domain->attach_count);
+	if (old)
+		atomic_dec(&old->attach_count);
 
 	dev->iommu->attach_deferred = 0;
 	trace_attach_device_to_domain(dev);
