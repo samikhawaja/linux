@@ -2563,6 +2563,12 @@ extern int iommu_unpreserve_device(struct iommu_domain *domain, struct device *d
 
 void iommu_domain_free(struct iommu_domain *domain)
 {
+	if (WARN_ON_ONCE(iommu_domain_has_attachments(domain))) {
+		pr_err("Attempt to free an iommu_domain that has attachments: %d\n",
+		       atomic_read(&domain->attach_count));
+		return;
+	}
+
 	switch (domain->cookie_type) {
 	case IOMMU_COOKIE_DMA_IOVA:
 		iommu_put_dma_cookie(domain);
