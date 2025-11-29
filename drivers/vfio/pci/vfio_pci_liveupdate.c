@@ -39,7 +39,7 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	struct vfio_device *device = vfio_device_from_file(args->file);
 	struct vfio_pci_core_device_ser *ser;
 	struct vfio_pci_core_device *vdev;
-	int err, attach_token;
+	int err, iommufd_token;
 	struct pci_dev *pdev;
 	struct folio *folio;
 
@@ -54,9 +54,10 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 
 	/* If iommufd is attached, preserve the underlying domain */
 	if (device->iommufd_attached) {
-		attach_token = iommufd_device_preserve(device->iommufd_device);
-		if (attach_token < 0)
-			return attach_token;
+		iommufd_token = iommufd_device_preserve(device->iommufd_device,
+						       IOMMU_NO_PASID);
+		if (iommufd_token < 0)
+			return iommufd_token;
 	}
 
 	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, get_order(sizeof(*ser)));
@@ -70,9 +71,7 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	ser->bdf = pci_dev_id(pdev);
 	ser->domain = pci_domain_nr(pdev->bus);
 	ser->reset_works = vdev->reset_works;
-	ser->iommufd_ser.file_token = 0;
-	ser->iommufd_ser.nr_attachments = 1;
-	ser->iommufd_ser.attachment_token[0] = attach_token;
+	ser->iommufd_ser.token = iommufd_token;
 
 	err = kho_preserve_folio(folio);
 	if (err)

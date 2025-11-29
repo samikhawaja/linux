@@ -2552,16 +2552,18 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 	device_ser->iommu_idx = iommu->iommu_dev->outgoing_preserved_state->obj.idx;
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain = pci_domain_nr(pdev->bus);
+	device_ser->token = device_ser->obj.idx + 1;
 
 	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
 	if (ret) {
 		device_ser->obj.deleted = true;
 		/* iommu_unpreserve_locked(iommu->iommu_dev); */
+		return ret;
 	}
 
 	dev->iommu->device_ser = device_ser;
 	domain->preserved_state->attach_count++;
-	return ret;
+	return device_ser->token;
 }
 
 extern int iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
@@ -3834,13 +3836,13 @@ EXPORT_SYMBOL_GPL(iommu_group_claim_dma_owner);
  * iommu_device_claim_dma_owner() - Set DMA ownership of a device
  * @dev: The device.
  * @owner: Caller specified pointer. Used for exclusive ownership.
- * @ser: Restored state from previous kernel
+ * @restore_token: Token of the device preserved state.
  *
  * Claim the DMA ownership of a device. Multiple devices in the same group may
  * concurrently claim ownership if they present the same owner value. Returns 0
  * on success and error code on failure
  */
-int iommu_device_claim_dma_owner(struct device *dev, void *owner, struct device_ser *ser)
+int iommu_device_claim_dma_owner(struct device *dev, void *owner, u32 restore_token)
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
@@ -3866,10 +3868,7 @@ int iommu_device_claim_dma_owner(struct device *dev, void *owner, struct device_
 
 #ifdef CONFIG_LIVEUPDATE
 	restored_state = dev_iommu_restored_state(dev);
-	if (!ser ^ !restored_state)
-		return -EINVAL;
-
-	if (ser && ser == restored_state)
+	if (restored_state && restored_state->token == restore_token)
 		transfer = true;
 #endif
 

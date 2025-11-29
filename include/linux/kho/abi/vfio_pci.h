@@ -31,14 +31,12 @@
 /**
  * struct vfio_iommufd_ser - Serialized state of a VFIO to iommufd relationship.
  *
- * @file_token: The token of the bound iommufd state.
+ * @token: The token of the bound iommufd state.
  * @nr_attachments: Number of preserved attachments.
  * @attachment_token: Token of each preserved attachment.
  */
 struct vfio_iommufd_ser {
-	u32 file_token;
-	u32 nr_attachments;
-	u32 attachment_token[0];
+	u32 token;
 } __packed;
 
 /**

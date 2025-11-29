@@ -204,6 +204,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  * @ictx: iommufd file descriptor
  * @dev: Pointer to a physical device struct
  * @id: Output ID number to return to userspace for this device
+ * @restore_token: Preserved state token if restoring.
  *
  * A successful bind establishes an ownership over the device and returns
  * struct iommufd_device pointer, otherwise returns error pointer.
@@ -216,7 +217,8 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  * The caller must undo this with iommufd_device_unbind()
  */
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
-					   struct device *dev, u32 *id)
+					   struct device *dev, u32 *id,
+					   u32 restore_token)
 {
 	struct iommufd_device *idev;
 	struct iommufd_group *igroup;
@@ -253,7 +255,7 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 			"Use the \"allow_unsafe_interrupts\" module parameter to override\n");
 	}
 
-	rc = iommu_device_claim_dma_owner(dev, ictx, dev->iommu->device_ser);
+	rc = iommu_device_claim_dma_owner(dev, ictx, restore_token);
 	if (rc)
 		goto out_group_put;
 
@@ -1666,3 +1668,42 @@ out_put:
 	iommufd_put_object(ucmd->ictx, &idev->obj);
 	return rc;
 }
+
+#ifdef CONFIG_LIVEUPDATE
+int iommufd_device_preserve(struct iommufd_device *idev, ioasid_t pasid)
+{
+	struct iommufd_group *igroup = idev->igroup;
+	struct iommufd_hwpt_paging *hwpt_paging;
+	struct iommufd_hw_pagetable *hwpt;
+	struct iommufd_attach *attach;
+	int ret;
+
+	mutex_lock(&igroup->lock);
+	attach = xa_load(&igroup->pasid_attach, pasid);
+	if (!attach) {
+		ret = -ENOENT;
+		goto out;
+	}
+
+	hwpt = attach->hwpt;
+	hwpt_paging = find_hwpt_paging(hwpt);
+	if (!hwpt_paging || !hwpt_paging->lu_preserved) {
+		ret = -EINVAL;
+		goto out;
+	}
+
+	/* TODO: Add support PASIDs */
+	ret = iommu_preserve_device(hwpt_paging->common.domain, idev->dev);
+
+out:
+	mutex_unlock(&igroup->lock);
+	return ret;
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_device_preserve, "IOMMUFD");
+
+void iommufd_device_unpreserve(struct iommufd_device *idev)
+{
+
+}
+EXPORT_SYMBOL_NS_GPL(iommufd_device_unpreserve, "IOMMUFD");
+#endif

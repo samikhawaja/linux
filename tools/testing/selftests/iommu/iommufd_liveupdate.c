@@ -176,12 +176,12 @@ int luo_retrieve_session(int luo_fd, const char *name)
 	return arg.fd;
 }
 
-int liveupdate_preserve_iommufd(int session_fd, int iommufd, int token)
+int liveupdate_preserve_fd(int session_fd, int fd, int token)
 {
 	struct liveupdate_session_preserve_fd preserve;
 	int ret;
 
-	preserve.fd = iommufd;
+	preserve.fd = fd;
 	preserve.token = token;
 	preserve.size = sizeof(preserve);
 
@@ -192,7 +192,7 @@ int liveupdate_preserve_iommufd(int session_fd, int iommufd, int token)
 	return ret;
 }
 
-int liveupdate_restore_iommufd(int session_fd, int token)
+int liveupdate_restore_fd(int session_fd, int token)
 {
 	struct liveupdate_session_retrieve_fd arg = { .size = sizeof(arg) };
 	int ret;
@@ -210,6 +210,7 @@ int main(int argc, char *argv[])
 {
 	int iommufd, cdev_fd, luo, session, ret;
 	const int token = 0x123456;
+	const int cdev_token = 0x654321;
 	const int hwpt_token = 0x789012;
 	bool updated = false;
 
@@ -218,8 +219,6 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	cdev_fd = setup_cdev(argv[1]);
-
 	luo = open_liveupdate_orchestrator();
 	ksft_assert(luo > 0);
 
@@ -227,9 +226,11 @@ int main(int argc, char *argv[])
 	if (session == -ENOENT) {
 		session = luo_create_session(luo, "iommufd-test");
 		iommufd = open_iommufd();
+		cdev_fd = setup_cdev(argv[1]);
 	} else {
 		updated = true;
-		iommufd = liveupdate_restore_iommufd(session, token);
+		iommufd = liveupdate_restore_fd(session, token);
+		cdev_fd = liveupdate_restore_fd(session, cdev_token);
 	}
 
 	if (!updated) {
@@ -241,7 +242,10 @@ int main(int argc, char *argv[])
 	}
 
 	if (!updated) {
-		ret = liveupdate_preserve_iommufd(session, iommufd, token);
+		ret = liveupdate_preserve_fd(session, iommufd, token);
+		ksft_assert(!ret);
+
+		ret = liveupdate_preserve_fd(session, cdev_fd, cdev_token);
 		ksft_assert(!ret);
 
 		while (1)

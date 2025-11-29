@@ -125,8 +125,6 @@ static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
 
 			hwpt_lu->domain_data = __pa(domain_ser);
 		}
-
-		iommu_preserve_device(hwpts[0]->common.domain, idev->dev);
 	}
 
 	rc = nr_hwpts;
@@ -442,15 +440,4 @@ static int __init iommufd_liveupdate_init(void)
 	return 0;
 }
 
-int iommufd_device_preserve(struct iommufd_device *idev)
-{
-	return 0;
-}
-EXPORT_SYMBOL_NS_GPL(iommufd_device_preserve, "IOMMUFD");
-
-void iommufd_device_unpreserve(struct iommufd_device *idev)
-{
-
-}
-EXPORT_SYMBOL_NS_GPL(iommufd_device_unpreserve, "IOMMUFD");
 subsys_initcall(iommufd_liveupdate_init);
