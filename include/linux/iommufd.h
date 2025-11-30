@@ -78,6 +78,7 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 			    u64 *tokenp);
 void iommufd_device_unpreserve(struct liveupdate_session *s,
 			       struct iommufd_device *idev);
+bool iommufd_device_is_preserved(struct iommufd_device *idev);
 #else
 static inline int iommufd_device_preserve(struct liveupdate_session *s,
 					  struct iommufd_device *idev,
@@ -89,6 +90,11 @@ static inline int iommufd_device_preserve(struct liveupdate_session *s,
 static inline void iommufd_device_unpreserve(struct liveupdate_session *s,
 					     struct iommufd_device *idev)
 {
+}
+
+static inline bool iommufd_device_is_preserved(struct iommufd_device *idev)
+{
+	return false;
 }
 #endif
 
