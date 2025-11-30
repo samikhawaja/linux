@@ -383,6 +383,7 @@ struct iommufd_hwpt_paging {
 	bool nest_parent : 1;
 #ifdef CONFIG_LIVEUPDATE
 	bool lu_preserved : 1;
+	bool lu_restored : 1;
 	u32 lu_token;
 #endif
 	/* Head at iommufd_ioas::hwpt_list */
@@ -728,9 +729,6 @@ int iommufd_liveupdate_unregister_lufs(void);
 
 int iommufd_hwpt_lu_set_preserved(struct iommufd_ucmd *ucmd);
 int iommufd_hwpt_lu_restore(struct iommufd_ucmd *ucmd);
-
-/* TODO */
-#define iommu_domain_has_attachments(x) (false)
 #else
 static inline int iommufd_liveupdate_register_lufs(void)
 {
