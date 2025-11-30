@@ -29,17 +29,28 @@
 #define VFIO_PCI_LUO_FH_COMPATIBLE "vfio-pci-v2"
 
 /**
+ * struct vfio_iommufd_ser - Serialized state of the attached iommufd.
+ *
+ * @token: The token of the bound iommufd state.
+ */
+struct vfio_iommufd_ser {
+	u32 token;
+} __packed;
+
+/**
  * struct vfio_pci_core_device_ser - Serialized state of a single VFIO PCI
  * device.
  *
  * @domain: The device's PCI domain number (segment).
  * @bdf: The device's PCI bus, device, and function number.
  * @reset_works: Non-zero if the device supports function resets.
+ * @iommufd_ser: Serialized state of bound iommufd
  */
 struct vfio_pci_core_device_ser {
 	u32 domain;
 	u16 bdf;
 	u8 reset_works;
+	struct vfio_iommufd_ser iommufd_ser;
 } __packed;
 
 #endif /* _LINUX_LIVEUPDATE_ABI_VFIO_PCI_H */
