@@ -1029,7 +1029,7 @@ static bool first_level_by_default(struct intel_iommu *iommu)
 }
 
 int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu,
-			struct device_domain_ser *ser)
+			int restore_did)
 {
 	struct iommu_domain_info *info, *curr;
 	int num, ret = -ENOSPC;
@@ -1049,13 +1049,11 @@ int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu,
 		return 0;
 	}
 
-	if (ser && iommu_domain_restored_state(&domain->domain)) {
-		num = ida_alloc_range(&iommu->domain_ida, ser->did,
-				      ser->did, GFP_KERNEL);
-	} else {
+	if (restore_did >= 0)
+		num = restore_did;
+	else
 		num = ida_alloc_range(&iommu->domain_ida, IDA_START_DID,
 				      cap_ndoms(iommu->cap) - 1, GFP_KERNEL);
-	}
 	if (num < 0) {
 		pr_err("%s: No free domain ids\n", iommu->name);
 		goto err_unlock;
@@ -1335,7 +1333,7 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 #endif
 
 	ret = domain_attach_iommu(domain, iommu,
-				  (device_ser ? &device_ser->domain_ser : NULL));
+				  dev_iommu_restore_did(dev, &domain->domain));
 	if (ret)
 		return ret;
 
@@ -1657,7 +1655,7 @@ static int __init init_dmars(void)
 		}
 
 #if IS_ENABLED(CONFIG_LIVEUPDATE)
-		iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL, &iommu_ser);
+		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
 #endif
 
 		intel_iommu_init_qi(iommu);
@@ -2144,7 +2142,7 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 		iommu_disable_translation(iommu);
 
 #if IS_ENABLED(CONFIG_LIVEUPDATE)
-		iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL, &iommu_ser);
+		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
 #endif
 
 	ret = iommu_alloc_root_entry(iommu, iommu_ser);
@@ -3622,7 +3620,7 @@ domain_add_dev_pasid(struct iommu_domain *domain,
 	if (!dev_pasid)
 		return ERR_PTR(-ENOMEM);
 
-	ret = domain_attach_iommu(dmar_domain, iommu, NULL);
+	ret = domain_attach_iommu(dmar_domain, iommu, -1);
 	if (ret)
 		goto out_free;
 

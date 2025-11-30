@@ -93,16 +93,13 @@ static int restore_iommu_context(struct intel_iommu *iommu)
 	return ret;
 }
 
-static void restore_used_domain_ids(struct intel_iommu *iommu,
-				    struct iommu_ser *iommu_ser)
+static int __restore_used_domain_ids(struct device_ser *ser, void *arg)
 {
-/*	unsigned int count;
-	int id;
+	int id = ser->domain_iommu_ser.did;
+	struct intel_iommu *iommu = arg;
 
-	for (count = 0; count < iommu_ser->count_domains; count++) {
-		id = iommu_ser->domains[count].did;
-		BUG_ON(ida_alloc_range(&iommu->domain_ida, id, id, GFP_KERNEL) < 0);
-	}*/
+	ida_alloc_range(&iommu->domain_ida, id, id, GFP_KERNEL);
+	return 0;
 }
 
 int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
@@ -122,41 +119,12 @@ int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 		iommu->root_entry = NULL;
 	}
 
-	restore_used_domain_ids(iommu, iommu_ser);
+	iommu_for_each_preserved_device(__restore_used_domain_ids, iommu);
 	pr_info("Restored IOMMU[0x%llx] Root Table at: 0x%llx\n",
 		iommu->reg_phys, iommu_ser->intel.root_table);
 
 	return ret;
 }
-
-/*static int count_domain_ids(struct intel_iommu *iommu)
-{
-	unsigned int count = 0;
-	int id;
-
-	for (id = 0; id < cap_ndoms(iommu->cap); id++)
-		if (ida_exists(&iommu->domain_ida, id))
-			count++;
-
-	return count;
-}
-
-static int preserve_iommu_domain_attachment(struct device_domain_info *info)
-{
-	struct iommu_unit_ser *iommu_ser;
-	int idx;
-
-	iommu_ser = phys_to_virt(info->iommu->iommu.preserved_state->data);
-	if (iommu_ser->count_domains == iommu_ser->count_max_domains)
-		return -ENOSPC;
-
-	idx = iommu_ser->count_domains++;
-	iommu_ser->domains[idx].did = domain_id_iommu(info->domain, info->iommu);
-	iommu_ser->domains[idx].domain_idx = info->domain->domain.preserved_state->idx;
-
-	return 0;
-}
-*/
 
 int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_ser)
 {
@@ -168,7 +136,7 @@ int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_se
 	if (!info)
 		return -EINVAL;
 
-	device_ser->domain_ser.did = domain_id_iommu(info->domain, info->iommu);
+	device_ser->domain_iommu_ser.did = domain_id_iommu(info->domain, info->iommu);
 	return 0;
 }
 

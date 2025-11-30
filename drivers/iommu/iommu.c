@@ -2288,7 +2288,7 @@ static inline bool device_ser_match(struct device_ser *match,
 	return match->devid == pci_dev_id(pdev) && match->pci_domain == pci_domain_nr(pdev->bus);
 }
 
-struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool incoming)
+/*struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool incoming)
 {
 	struct iommu_domains_ser *domains;
 	struct iommu_lu_flb_obj *obj;
@@ -2317,7 +2317,34 @@ struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool in
 	}
 
 	return ERR_PTR(-ENOENT);
+}*/
+
+int iommu_for_each_preserved_device(int (*fn)(struct device_ser *ser, void *arg),
+				    void *arg)
+{
+	struct iommu_lu_flb_obj *obj;
+	struct devices_ser *devices;
+	int ret, i, idx;
+
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &obj);
+	if (ret)
+		return -ENOENT;
+
+	devices = __va(obj->ser->devices_phys);
+	for (i = 0, idx = 0; i < obj->ser->nr_devices; ++i, ++idx) {
+		if (idx >= MAX_DEVICE_SERS) {
+			devices = __va(devices->objs.next_objs);
+			idx = 0;
+		}
+
+		ret = fn(&devices->devices[idx], arg);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
+EXPORT_SYMBOL(iommu_for_each_preserved_device);
 
 struct device_ser* iommu_get_device_preserved_data(struct device *dev, bool incoming)
 {
@@ -2353,8 +2380,7 @@ struct device_ser* iommu_get_device_preserved_data(struct device *dev, bool inco
 }
 EXPORT_SYMBOL(iommu_get_device_preserved_data);
 
-int iommu_get_preserved_data(u64 token, enum iommu_lu_type type,
-			     struct iommu_ser **iommu_ser)
+struct iommu_ser* iommu_get_preserved_data(u64 token, enum iommu_lu_type type)
 {
 	struct iommu_lu_flb_obj *obj;
 	struct iommus_ser *iommus;
@@ -2362,7 +2388,7 @@ int iommu_get_preserved_data(u64 token, enum iommu_lu_type type,
 
 	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &obj);
 	if (ret)
-		return ret;
+		return NULL;
 
 	iommus = __va(obj->ser->iommu_devices_phys);
 	for (i = 0, idx = 0; i < obj->ser->nr_iommus; ++i, ++idx) {
@@ -2372,12 +2398,11 @@ int iommu_get_preserved_data(u64 token, enum iommu_lu_type type,
 		}
 
 		if (iommus->iommus[idx].token == token && iommus->iommus[idx].type == type) {
-			*iommu_ser = &iommus->iommus[idx];
-			return 0;
+			return &iommus->iommus[idx];
 		}
 	}
 
-	return -ENOENT;
+	return NULL;
 }
 EXPORT_SYMBOL(iommu_get_preserved_data);
 
@@ -2548,8 +2573,8 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 		iommu->iommu_dev->outgoing_preserved_state->obj.ref_count++;
 	}
 
-	device_ser->domain_idx = domain->preserved_state->obj.idx;
-	device_ser->iommu_idx = iommu->iommu_dev->outgoing_preserved_state->obj.idx;
+	device_ser->domain_iommu_ser.domain_phys = __pa(domain->preserved_state);
+	device_ser->domain_iommu_ser.iommu_phys = __pa(iommu->iommu_dev->outgoing_preserved_state);
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain = pci_domain_nr(pdev->bus);
 	device_ser->token = device_ser->obj.idx + 1;
@@ -3495,9 +3520,7 @@ static struct iommu_domain *__iommu_group_restore_domain(struct iommu_group *gro
 	if (!device_ser)
 		return ERR_PTR(-ENOENT);
 
-	domain_ser = iommu_get_domain_preserved_data(device_ser->domain_idx, true);
-	if (IS_ERR(domain_ser))
-		return ERR_PTR(PTR_ERR(domain_ser));
+	domain_ser = __va(device_ser->domain_iommu_ser.domain_phys);
 
 	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **) &flb_obj);
 	if (ret)
@@ -3507,6 +3530,7 @@ static struct iommu_domain *__iommu_group_restore_domain(struct iommu_group *gro
 	if (domain_ser->restored_domain)
 		return domain_ser->restored_domain;
 
+	domain_ser->obj.incoming =  true;
 	domain = iommu_paging_domain_alloc(dev);
 	if (IS_ERR(domain))
 		return domain;

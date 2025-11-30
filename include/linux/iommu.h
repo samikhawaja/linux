@@ -912,6 +912,16 @@ static inline void* iommu_domain_restored_state(struct iommu_domain *domain)
 
 	return NULL;
 }
+
+static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain *domain)
+{
+	struct device_ser *ser = dev_iommu_restored_state(dev);
+
+	if (ser && iommu_domain_restored_state(domain))
+		return ser->domain_iommu_ser.did;
+
+	return -1;
+}
 #else
 static inline void* dev_iommu_preserved_state(struct device *dev)
 {
@@ -921,6 +931,11 @@ static inline void* dev_iommu_preserved_state(struct device *dev)
 static inline void* dev_iommu_restored_state(struct device *dev)
 {
 	return NULL;
+}
+
+static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain *domain)
+{
+	return -1;
 }
 
 static inline void* iommu_domain_restored_state(struct iommu_domain *domain)
@@ -986,11 +1001,11 @@ extern int iommu_domain_unpreserve(struct iommu_domain *domain);
 extern int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
 extern int iommu_preserve_device(struct iommu_domain *domain, struct device *dev);
 extern int iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
-extern int iommu_get_preserved_data(u64 token, enum iommu_lu_type type,
-				    struct iommu_ser **iommu_ser);
+extern struct iommu_ser* iommu_get_preserved_data(u64 token, enum iommu_lu_type type);
 extern struct device_ser* iommu_get_device_preserved_data(struct device *dev,
 							  bool incoming);
-extern struct iommu_domain_ser *iommu_get_domain_preserved_data(int domain_idx, bool incoming);
+extern int iommu_for_each_preserved_device(int (*fn)(struct device_ser *ser, void *arg),
+					   void *arg);
 #endif
 
 extern void iommu_domain_free(struct iommu_domain *domain);

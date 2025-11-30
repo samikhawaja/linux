@@ -1174,7 +1174,7 @@ void __iommu_flush_iotlb(struct intel_iommu *iommu, u16 did, u64 addr,
 #define QI_OPT_WAIT_DRAIN		BIT(0)
 
 int domain_attach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu,
-			struct device_domain_ser *ser);
+			int restore_did);
 void domain_detach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu);
 void device_block_translation(struct device *dev);
 int paging_domain_compatible(struct iommu_domain *domain, struct device *dev);
@@ -1286,7 +1286,12 @@ void intel_iommu_unpreserve(struct iommu_device *iommu, struct iommu_ser *iommu_
 int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
                                               struct iommu_ser *iommu_ser);
 bool intel_iommu_liveupdate_clear_context_entries(struct intel_iommu *iommu);
-int intel_iommu_get_preserved_domain_id(struct dmar_domain *domain, struct intel_iommu *iommu);
+#define for_each_preserved_device(flb_obj, b, i, dev_ser)		      \
+	for (blob = (flb_obj)->devices; blob;				      \
+	     blob = blob->obj.next_blob_phys ? __va(blob->next_blob_phys) : NULL) \
+		for (i = 0; i < blob->count; i++)			      \
+			if ((dev_ser = &blob->objects[i]),		      \
+			    !dev_ser->status == LU_OBJ_DELETED)
 #endif
 
 #ifdef CONFIG_INTEL_IOMMU_SVM
