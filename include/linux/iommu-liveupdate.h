@@ -74,6 +74,11 @@ void iommu_domain_unpreserve(struct iommu_domain *domain);
 int iommu_preserve_device(struct iommu_domain *domain,
 			  struct device *dev, u64 token);
 void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
+
+static inline void *iommu_preserved_state(struct iommu_device *iommu)
+{
+	return iommu->outgoing_preserved_state;
+}
 #else
 static inline void *dev_iommu_preserved_state(struct device *dev)
 {
@@ -127,6 +132,11 @@ static inline int iommu_preserve_device(struct iommu_domain *domain,
 
 static inline void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 {
+}
+
+static inline void *iommu_preserved_state(struct iommu_device *iommu)
+{
+	return NULL;
 }
 #endif
 

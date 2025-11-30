@@ -73,6 +73,7 @@
 
 enum iommu_lu_type {
 	IOMMU_INVALID,
+	IOMMU_INTEL,
 };
 
 /**
@@ -135,15 +136,29 @@ struct iommu_device_ser {
 } __packed;
 
 /**
+ * struct iommu_intel_ser - Serialized state of an Intel IOMMU instance
+ * @phys_addr: Physical address of the IOMMU register base
+ * @root_table: Physical address of the root entry table
+ */
+struct iommu_intel_ser {
+	u64 phys_addr;
+	u64 root_table;
+};
+
+/**
  * struct iommu_hw_ser - Serialized state of an IOMMU instance
  * @hdr: Common object header
  * @token: Unique token for the IOMMU
  * @type: IOMMU type serialized state belongs to
+ * @intel: Intel specific serialization data
  */
 struct iommu_hw_ser {
 	struct iommu_hdr_ser hdr;
 	u64 token;
 	enum iommu_lu_type type;
+	union {
+		struct iommu_intel_ser intel;
+	};
 } __packed;
 
 /**
