@@ -59,6 +59,7 @@ static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
 			      struct iommufd_lu *iommufd_lu)
 {
 	struct iommufd_hwpt_paging *hwpt, **hwpts = NULL;
+	struct iommu_domain_ser *domain_ser;
 	struct iommufd_hwpt_lu *hwpt_lu;
 	struct iommufd_object *obj;
 	unsigned int nr_hwpts = 0;
@@ -119,8 +120,11 @@ static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
 			hwpt = hwpts[i];
 			hwpt_lu = &iommufd_lu->hwpts[i];
 
-			rc = iommu_domain_preserve(hwpt->common.domain, &hwpt_lu->domain_data);
-			goto out;
+			rc = iommu_domain_preserve(hwpt->common.domain, &domain_ser);
+			if (rc < 0)
+				goto out;
+
+			hwpt_lu->domain_data = __pa(domain_ser);
 		}
 	}
 
@@ -201,7 +205,7 @@ static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 		if (!hwpt->common.domain)
 			continue;
 
-		/* TODO: WARN_ON(iommu_domain_unpreserve(hwpt->common.domain)); */
+		WARN_ON(iommu_domain_unpreserve(hwpt->common.domain));
 	}
 	xa_unlock(&ictx->objects);
 
@@ -276,6 +280,7 @@ int iommufd_hwpt_lu_restore(struct iommufd_ucmd *ucmd)
 	struct iommu_hwpt_lu_restore *cmd = ucmd->cmd;
 	struct iommufd_hwpt_paging *hwpt = NULL;
 	struct iommufd_ctx *ictx = ucmd->ictx;
+	struct iommu_domain_ser *domain_ser;
 	struct iommufd_hwpt_lu *hwpt_lu;
 	struct iommufd_lu *iommufd_lu;
 	struct iommu_domain *domain;
@@ -303,10 +308,10 @@ hwpt_found:
 	if (IS_ERR(hwpt))
 		return PTR_ERR(hwpt);
 
-	/* a successful iommu_domain_restore mars the point of no return */
-	domain = iommu_domain_restore(hwpt_lu->domain_data);
-	if (IS_ERR(domain)) {
-		rc = PTR_ERR(domain);
+	domain_ser = __va(hwpt_lu->domain_data);
+	domain = domain_ser->restored_domain;
+	if (!domain) {
+		rc = -ENOENT;
 		goto err_destroy;
 	}
 
