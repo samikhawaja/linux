@@ -15,6 +15,7 @@
 #include <linux/liveupdate.h>
 #include <linux/errno.h>
 #include <linux/vfio.h>
+#include <linux/iommufd.h>
 
 #include "vfio_pci_priv.h"
 
@@ -39,6 +40,7 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	struct vfio_pci_core_device_ser *ser;
 	struct vfio_pci_core_device *vdev;
 	struct pci_dev *pdev;
+	u64 token = 0;
 
 	vdev = container_of(device, struct vfio_pci_core_device, vdev);
 	pdev = vdev->pdev;
@@ -49,15 +51,30 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	if (vfio_pci_is_intel_display(pdev))
 		return -EINVAL;
 
+	/* If iommufd is attached, preserve the underlying domain */
+	if (device->iommufd_attached) {
+		int err = iommufd_device_preserve(args->session,
+						  device->iommufd_device,
+						  &token);
+		if (err < 0)
+			return err;
+	}
+
 	ser = kho_alloc_preserve(sizeof(*ser));
-	if (IS_ERR(ser))
+	if (IS_ERR(ser)) {
+		if (device->iommufd_attached)
+			iommufd_device_unpreserve(args->session,
+						  device->iommufd_device, token);
+
 		return PTR_ERR(ser);
+	}
 
 	pci_liveupdate_outgoing_preserve(pdev);
 
 	ser->bdf = pci_dev_id(pdev);
 	ser->domain = pci_domain_nr(pdev->bus);
 	ser->reset_works = vdev->reset_works;
+	ser->iommufd_ser.token = token;
 
 	args->serialized_data = virt_to_phys(ser);
 	return 0;
@@ -66,6 +83,13 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 static void vfio_pci_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 {
 	struct vfio_device *device = vfio_device_from_file(args->file);
+	struct vfio_pci_core_device_ser *ser;
+
+	ser = phys_to_virt(args->serialized_data);
+	if (device->iommufd_attached)
+		iommufd_device_unpreserve(args->session,
+					  device->iommufd_device,
+					  ser->iommufd_ser.token);
 
 	pci_liveupdate_outgoing_unpreserve(to_pci_dev(device->dev));
 	kho_unpreserve_free(phys_to_virt(args->serialized_data));
