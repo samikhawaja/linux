@@ -768,11 +768,6 @@ struct iommu_ops {
  *                           specific mechanisms.
  * @set_pgtable_quirks: Set io page table quirks (IO_PGTABLE_QUIRK_*)
  * @free: Release the domain after use.
- * @preserve: Preserve the iommu domain for liveupdate.
- *            Returns 0 on success, a negative errno on failure.
- * @unpreserve: Unpreserve the iommu domain that was preserved earlier.
- * @restore: Restore the iommu domain after liveupdate.
- *           Returns 0 on success, a negative errno on failure.
  */
 struct iommu_domain_ops {
 	int (*attach_dev)(struct iommu_domain *domain, struct device *dev,
@@ -803,9 +798,6 @@ struct iommu_domain_ops {
 				  unsigned long quirks);
 
 	void (*free)(struct iommu_domain *domain);
-	int (*preserve)(struct iommu_domain *domain, struct iommu_domain_ser *ser);
-	void (*unpreserve)(struct iommu_domain *domain, struct iommu_domain_ser *ser);
-	int (*restore)(struct iommu_domain *domain, struct iommu_domain_ser *ser);
 };
 
 /**

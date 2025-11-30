@@ -7,12 +7,13 @@
 
 #define pr_fmt(fmt)    "iommu: liveupdate: " fmt
 
-#include <linux/kexec_handover.h>
-#include <linux/liveupdate.h>
+#include <linux/errno.h>
+#include <linux/generic_pt/iommu.h>
 #include <linux/iommu-liveupdate.h>
 #include <linux/iommu.h>
+#include <linux/kexec_handover.h>
+#include <linux/liveupdate.h>
 #include <linux/pci.h>
-#include <linux/errno.h>
 
 #define iommu_max_objs_per_page(_array) \
 	((PAGE_SIZE - sizeof(struct iommu_array_hdr_ser)) / sizeof((_array)->objects[0]))
@@ -252,11 +253,12 @@ static struct iommu_domain_ser *alloc_iommu_domain_ser(struct iommu_flb_obj *flb
 
 int iommu_preserve_domain(struct iommu_domain *domain, struct iommu_domain_ser **ser)
 {
+	struct pt_iommu *pt = iommupt_from_domain(domain);
 	struct iommu_domain_ser *domain_ser;
 	struct iommu_flb_obj *flb_obj;
 	int ret;
 
-	if (!domain->ops->preserve)
+	if (!pt || !pt->ops->preserve || !pt->ops->unpreserve)
 		return -EOPNOTSUPP;
 
 	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
@@ -268,7 +270,7 @@ int iommu_preserve_domain(struct iommu_domain *domain, struct iommu_domain_ser *
 	if (IS_ERR(domain_ser))
 		return PTR_ERR(domain_ser);
 
-	ret = domain->ops->preserve(domain, domain_ser);
+	ret = pt->ops->preserve(pt, domain_ser);
 	if (ret) {
 		domain_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
 		return ret;
@@ -282,11 +284,12 @@ EXPORT_SYMBOL_GPL(iommu_preserve_domain);
 
 void iommu_unpreserve_domain(struct iommu_domain *domain)
 {
+	struct pt_iommu *pt = iommupt_from_domain(domain);
 	struct iommu_domain_ser *domain_ser;
 	struct iommu_flb_obj *flb_obj;
 	int ret;
 
-	if (!domain->ops->unpreserve)
+	if (WARN_ON(!pt || !pt->ops->unpreserve))
 		return;
 
 	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
@@ -307,7 +310,7 @@ void iommu_unpreserve_domain(struct iommu_domain *domain)
 	 * refcounting for the serialized objects here.
 	 */
 	domain_ser = domain->preserved_state;
-	domain->ops->unpreserve(domain, domain_ser);
+	pt->ops->unpreserve(pt, domain_ser);
 	domain_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
 	domain->preserved_state = NULL;
 }
