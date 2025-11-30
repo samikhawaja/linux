@@ -280,6 +280,18 @@ static int remove_iommu_group(struct device *dev, void *data)
 	return 0;
 }
 
+static void update_attachment_count(struct iommu_domain *domain, bool attach)
+{
+	if (!domain || domain->type == IOMMU_DOMAIN_BLOCKED
+	    || domain->type == IOMMU_DOMAIN_IDENTITY)
+		return;
+
+	if (attach)
+		atomic_inc(&domain->attach_count);
+	else
+		atomic_dec(&domain->attach_count);
+}
+
 /**
  * iommu_device_register() - Register an IOMMU hardware instance
  * @iommu: IOMMU handle for the instance
@@ -622,12 +634,24 @@ static void iommu_deinit_device(struct device *dev)
 		    release_domain == ops->blocked_domain)
 			release_domain = ops->identity_domain;
 
-		release_domain->ops->attach_dev(release_domain, dev,
-						group->domain);
+		if (!release_domain->ops->attach_dev(release_domain, dev,
+						     group->domain)) {
+			update_attachment_count(release_domain, true);
+			update_attachment_count(group->domain, false);
+		}
 	}
 
-	if (ops->release_device)
+	if (ops->release_device) {
 		ops->release_device(dev);
+
+		/*
+		 * Restored devices are detached from restored domain if not
+		 * reclaimed.
+		 */
+		if (dev_iommu_restored_state(dev) &&
+		    iommu_domain_restored_state(group->domain))
+			update_attachment_count(group->domain, false);
+	}
 
 	/*
 	 * If this is the last driver to use the group then we must free the
@@ -2141,6 +2165,7 @@ static void iommu_domain_init(struct iommu_domain *domain, unsigned int type,
 {
 	domain->type = type;
 	domain->owner = ops;
+	atomic_set(&domain->attach_count, 0);
 	if (!domain->ops)
 		domain->ops = ops->default_domain_ops;
 }
@@ -2193,8 +2218,20 @@ struct iommu_domain *iommu_paging_domain_alloc_flags(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(iommu_paging_domain_alloc_flags);
 
+bool iommu_domain_has_attachments(struct iommu_domain *domain)
+{
+	return atomic_read(&domain->attach_count) != 0;
+}
+EXPORT_SYMBOL_GPL(iommu_domain_has_attachments);
+
 void iommu_domain_free(struct iommu_domain *domain)
 {
+	if (WARN_ON_ONCE(iommu_domain_has_attachments(domain))) {
+		pr_err("Attempt to free an iommu_domain that has attachments: %d\n",
+		       atomic_read(&domain->attach_count));
+		return;
+	}
+
 	switch (domain->cookie_type) {
 	case IOMMU_COOKIE_DMA_IOVA:
 		iommu_put_dma_cookie(domain);
@@ -2240,6 +2277,17 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 	ret = domain->ops->attach_dev(domain, dev, old);
 	if (ret)
 		return ret;
+
+	update_attachment_count(domain, true);
+	update_attachment_count(old, false);
+
+#if CONFIG_IOMMU_LIVEUPDATE
+	if (old && dev_iommu_restored_state(dev) &&
+	    iommu_domain_restored_state(old) &&
+	    domain->type != IOMMU_DOMAIN_BLOCKED &&
+	    domain->type != IOMMU_DOMAIN_IDENTITY)
+		iommu_finish_preserved_device(dev);
+#endif
 
 	dev->iommu->attach_deferred = 0;
 	trace_attach_device_to_domain(dev);
