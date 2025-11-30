@@ -670,9 +670,16 @@ pgtable_walk:
 #endif
 
 /* iommu handling */
-static int iommu_alloc_root_entry(struct intel_iommu *iommu)
+static int iommu_alloc_root_entry(struct intel_iommu *iommu,
+				  struct iommu_hw_ser *iommu_ser)
 {
 	struct root_entry *root;
+
+	if (iommu_ser) {
+		intel_iommu_liveupdate_restore_root_table(iommu, iommu_ser);
+		__iommu_flush_cache(iommu, iommu->root_entry, ROOT_SIZE);
+		return 0;
+	}
 
 	root = iommu_alloc_pages_node_sz(iommu->node, GFP_ATOMIC, SZ_4K);
 	if (!root) {
@@ -992,15 +999,16 @@ static void disable_dmar_iommu(struct intel_iommu *iommu)
 		iommu_disable_translation(iommu);
 }
 
-static void free_dmar_iommu(struct intel_iommu *iommu)
+static void free_dmar_iommu(struct intel_iommu *iommu, struct iommu_hw_ser *iommu_ser)
 {
 	if (iommu->copied_tables) {
 		bitmap_free(iommu->copied_tables);
 		iommu->copied_tables = NULL;
 	}
 
-	/* free context mapping */
-	free_context_table(iommu);
+	/* free context mapping if there is no serialized state. */
+	if (!iommu_ser)
+		free_context_table(iommu);
 
 	if (ecap_prs(iommu->ecap))
 		intel_iommu_finish_prq(iommu);
@@ -1611,6 +1619,7 @@ out_unmap:
 
 static int __init init_dmars(void)
 {
+	struct iommu_hw_ser *iommu_ser = NULL;
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu;
 	int ret;
@@ -1633,8 +1642,12 @@ static int __init init_dmars(void)
 						   intel_pasid_max_id);
 		}
 
+		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
+
 		intel_iommu_init_qi(iommu);
-		init_translation_status(iommu);
+
+		if (!iommu_ser)
+			init_translation_status(iommu);
 
 		if (translation_pre_enabled(iommu) && !is_kdump_kernel()) {
 			iommu_disable_translation(iommu);
@@ -1648,7 +1661,7 @@ static int __init init_dmars(void)
 		 * we could share the same root & context tables
 		 * among all IOMMU's. Need to Split it later.
 		 */
-		ret = iommu_alloc_root_entry(iommu);
+		ret = iommu_alloc_root_entry(iommu, iommu_ser);
 		if (ret)
 			goto free_iommu;
 
@@ -1732,8 +1745,12 @@ static int __init init_dmars(void)
 
 free_iommu:
 	for_each_active_iommu(iommu, drhd) {
-		disable_dmar_iommu(iommu);
-		free_dmar_iommu(iommu);
+		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
+
+		if (!iommu_ser)
+			disable_dmar_iommu(iommu);
+
+		free_dmar_iommu(iommu, iommu_ser);
 	}
 
 	return ret;
@@ -2107,15 +2124,19 @@ int dmar_parse_one_satc(struct acpi_dmar_header *hdr, void *arg)
 static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 {
 	struct intel_iommu *iommu = dmaru->iommu;
+	struct iommu_hw_ser *iommu_ser = NULL;
 	int ret;
+
+	/* Use IOMMU HW unit MMIO base to identify the preserved state. */
+	iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
 
 	/*
 	 * Disable translation if already enabled prior to OS handover.
 	 */
-	if (iommu->gcmd & DMA_GCMD_TE)
+	if (!iommu_ser && iommu->gcmd & DMA_GCMD_TE)
 		iommu_disable_translation(iommu);
 
-	ret = iommu_alloc_root_entry(iommu);
+	ret = iommu_alloc_root_entry(iommu, iommu_ser);
 	if (ret)
 		goto out;
 
@@ -2150,9 +2171,10 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 	return 0;
 
 disable_iommu:
-	disable_dmar_iommu(iommu);
+	if (!iommu_ser)
+		disable_dmar_iommu(iommu);
 out:
-	free_dmar_iommu(iommu);
+	free_dmar_iommu(iommu, iommu_ser);
 	return ret;
 }
 
@@ -2160,6 +2182,7 @@ int dmar_iommu_hotplug(struct dmar_drhd_unit *dmaru, bool insert)
 {
 	int ret = 0;
 	struct intel_iommu *iommu = dmaru->iommu;
+	struct iommu_hw_ser *iommu_ser;
 
 	if (!intel_iommu_enabled)
 		return 0;
@@ -2169,8 +2192,12 @@ int dmar_iommu_hotplug(struct dmar_drhd_unit *dmaru, bool insert)
 	if (insert) {
 		ret = intel_iommu_add(dmaru);
 	} else {
-		disable_dmar_iommu(iommu);
-		free_dmar_iommu(iommu);
+		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
+
+		if (!iommu_ser)
+			disable_dmar_iommu(iommu);
+
+		free_dmar_iommu(iommu, iommu_ser);
 	}
 
 	return ret;
