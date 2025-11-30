@@ -194,10 +194,18 @@ vfio_pci_liveupdate_check_noiommu(struct vfio_pci_core_device *vdev)
 {
 	guard(mutex)(&vdev->vdev.dev_set->lock);
 
+	/*
+	 * A device preserved with its iommufd state keeps doing DMA through
+	 * the restored IOMMU domain. The IOMMU core claims DMA ownership of its
+	 * group when it restores the domain at boot, and nothing else can own
+	 * the group before the device is opened, so an owned group means the
+	 * device was restored and can keep running.
+	 */
 	if (vdev->liveupdate_kept_running &&
-	    !vfio_device_is_noiommu(&vdev->vdev)) {
+	    !vfio_device_is_noiommu(&vdev->vdev) &&
+	    !iommu_group_dma_owner_claimed(vdev->vdev.dev->iommu_group)) {
 		pci_warn(vdev->pdev,
-			 "Stopping device kept running across Live Update: not in noiommu mode\n");
+			 "Stopping device kept running across Live Update: not in noiommu mode and IOMMU state not restored\n");
 		pci_clear_master(vdev->pdev);
 		vdev->liveupdate_stopped_early = true;
 	}
