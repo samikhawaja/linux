@@ -121,14 +121,12 @@ struct iommu_dev_map_ser {
 /**
  * struct iommu_device_ser - Serialized state of a device
  * @hdr: Common object header
- * @token: Unique token for the device
  * @devid: Device ID
  * @pci_domain_nr: PCI domain number
  * @domain_iommu_ser: Domain and IOMMU mapping
  */
 struct iommu_device_ser {
 	struct iommu_hdr_ser hdr;
-	u64 token;
 	u32 devid;
 	u32 pci_domain_nr;
 	struct iommu_dev_map_ser domain_iommu_ser;
