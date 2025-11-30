@@ -18,6 +18,7 @@
 #include <linux/errno.h>
 #include <linux/host1x_context_bus.h>
 #include <linux/iommu.h>
+#include <linux/iommu-liveupdate.h>
 #include <linux/iommufd.h>
 #include <linux/idr.h>
 #include <linux/err.h>
@@ -71,6 +72,10 @@ struct iommu_group {
 	 */
 	unsigned int recovery_cnt;
 	void *owner;
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	/* Group is reserved for a device with live update state */
+	bool liveupdate_reserved;
+#endif
 };
 
 struct group_device {
@@ -624,6 +629,19 @@ static struct iommu_domain *pasid_array_entry_to_domain(void *entry)
 
 DEFINE_MUTEX(iommu_probe_device_lock);
 
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+static bool iommu_group_liveupdate_reserved(struct iommu_group *group)
+{
+	lockdep_assert_held(&group->mutex);
+	return group->liveupdate_reserved;
+}
+#else
+static inline bool iommu_group_liveupdate_reserved(struct iommu_group *group)
+{
+	return false;
+}
+#endif
+
 static int __iommu_probe_device(struct device *dev, struct list_head *group_list)
 {
 	struct iommu_group *group;
@@ -659,6 +677,11 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	if (IS_ERR(gdev)) {
 		ret = PTR_ERR(gdev);
 		goto err_put_group;
+	}
+
+	if (iommu_group_liveupdate_reserved(group)) {
+		ret = -EBUSY;
+		goto err_free_gdev;
 	}
 
 	/*
@@ -697,6 +720,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 
 err_remove_gdev:
 	list_del(&gdev->list);
+err_free_gdev:
 	__iommu_group_free_device(group, gdev);
 err_put_group:
 	iommu_deinit_device(dev);
@@ -3544,6 +3568,40 @@ bool iommu_group_dma_owner_claimed(struct iommu_group *group)
 	return user;
 }
 EXPORT_SYMBOL_GPL(iommu_group_dma_owner_claimed);
+
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+/**
+ * iommu_group_reserve_liveupdate() - Reserve a group for live update
+ * @group: The group.
+ *
+ * No other device can be added to a reserved group.
+ *
+ * Return: 0 on success, -EBUSY if the group is already reserved, or
+ * -EOPNOTSUPP if the group doesn't have exactly one device.
+ */
+int iommu_group_reserve_liveupdate(struct iommu_group *group)
+{
+	guard(mutex)(&group->mutex);
+	if (group->liveupdate_reserved)
+		return -EBUSY;
+
+	if (!list_is_singular(&group->devices))
+		return -EOPNOTSUPP;
+
+	group->liveupdate_reserved = true;
+	return 0;
+}
+
+/**
+ * iommu_group_unreserve_liveupdate() - Drop the live update reservation
+ * @group: The group.
+ */
+void iommu_group_unreserve_liveupdate(struct iommu_group *group)
+{
+	guard(mutex)(&group->mutex);
+	group->liveupdate_reserved = false;
+}
+#endif
 
 static void iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
 				   struct iommu_domain *domain)
