@@ -8,20 +8,53 @@
 #ifndef _LINUX_IOMMU_LIVEUPDATE_H
 #define _LINUX_IOMMU_LIVEUPDATE_H
 
+#include <linux/device.h>
 #include <linux/iommu.h>
 #include <linux/liveupdate.h>
 #include <linux/kho/abi/iommu.h>
 
 #ifdef CONFIG_IOMMU_LIVEUPDATE
+static inline void *dev_iommu_preserved_state(struct device *dev)
+{
+	struct iommu_device_ser *ser;
+
+	if (!dev->iommu)
+		return NULL;
+
+	ser = dev->iommu->device_ser;
+	if (ser && !ser->hdr.incoming)
+		return ser;
+
+	return NULL;
+}
+
 int iommu_domain_preserve(struct iommu_domain *domain, struct iommu_domain_ser **ser);
 void iommu_domain_unpreserve(struct iommu_domain *domain);
+int iommu_preserve_device(struct iommu_domain *domain,
+			  struct device *dev, u64 *preserved_state);
+void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
 #else
+static inline void *dev_iommu_preserved_state(struct device *dev)
+{
+	return NULL;
+}
+
 static inline int iommu_domain_preserve(struct iommu_domain *domain, struct iommu_domain_ser **ser)
 {
 	return -EOPNOTSUPP;
 }
 
 static inline void iommu_domain_unpreserve(struct iommu_domain *domain)
+{
+}
+
+static inline int iommu_preserve_device(struct iommu_domain *domain,
+					struct device *dev, u64 *preserved_state)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 {
 }
 #endif
