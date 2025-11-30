@@ -15,6 +15,7 @@
 #include <linux/liveupdate.h>
 #include <linux/errno.h>
 #include <linux/vfio.h>
+#include <linux/iommufd.h>
 
 #include "vfio_pci_priv.h"
 
@@ -40,6 +41,7 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	struct vfio_pci_core_device *vdev;
 	struct pci_dev *pdev;
 	struct folio *folio;
+	u64 token = 0;
 	int err;
 
 	vdev = container_of(device, struct vfio_pci_core_device, vdev);
@@ -51,15 +53,26 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	if (vfio_pci_is_intel_display(pdev))
 		return -EINVAL;
 
+	/* If iommufd is attached, preserve the underlying domain */
+	if (device->iommufd_attached) {
+		err = iommufd_device_preserve(args->session,
+					      device->iommufd_device, &token);
+		if (err < 0)
+			return err;
+	}
+
 	folio = folio_alloc(GFP_KERNEL | __GFP_ZERO, get_order(sizeof(*ser)));
-	if (!folio)
-		return -ENOMEM;
+	if (!folio) {
+		err = -ENOMEM;
+		goto error_folio;
+	}
 
 	ser = folio_address(folio);
 
 	ser->bdf = pci_dev_id(pdev);
 	ser->domain = pci_domain_nr(pdev->bus);
 	ser->reset_works = vdev->reset_works;
+	ser->iommufd_ser.token = token;
 
 	err = kho_preserve_folio(folio);
 	if (err)
@@ -69,8 +82,12 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	args->serialized_data = virt_to_phys(ser);
 	return 0;
 
-error:
+error_folio:
 	folio_put(folio);
+error:
+	if (device->iommufd_attached)
+		iommufd_device_unpreserve(args->session,
+					  device->iommufd_device, token);
 	return err;
 }
 
@@ -79,6 +96,11 @@ static void vfio_pci_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
 	struct vfio_device *device = vfio_device_from_file(args->file);
 	struct folio *folio = virt_to_folio(ser);
+
+	if (device->iommufd_attached)
+		iommufd_device_unpreserve(args->session,
+					  device->iommufd_device,
+					  ser->iommufd_ser.token);
 
 	pci_liveupdate_outgoing_unpreserve(to_pci_dev(device->dev));
 	kho_unpreserve_folio(folio);
