@@ -11,6 +11,7 @@
 #include <linux/liveupdate.h>
 #include <linux/iommu-lu.h>
 #include <linux/iommu.h>
+#include <linux/pci.h>
 #include <linux/errno.h>
 
 static void iommu_liveupdate_restore_objs(u64 next)
@@ -175,3 +176,328 @@ int iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler)
 	return liveupdate_unregister_flb(handler, &iommu_flb);
 }
 EXPORT_SYMBOL(iommu_liveupdate_unregister_flb);
+
+int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
+				    void *arg)
+{
+	struct iommu_lu_flb_obj *obj;
+	struct devices_ser *devices;
+	int ret, i, idx;
+
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&obj);
+	if (ret)
+		return -ENOENT;
+
+	devices = __va(obj->ser->devices_phys);
+	for (i = 0, idx = 0; i < obj->ser->nr_devices; ++i, ++idx) {
+		if (idx >= MAX_DEVICE_SERS) {
+			devices = __va(devices->objs.next_objs);
+			idx = 0;
+		}
+
+		if (devices->devices[idx].obj.deleted)
+			continue;
+
+		ret = fn(&devices->devices[idx], arg);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+EXPORT_SYMBOL(iommu_for_each_preserved_device);
+
+static inline bool device_ser_match(struct device_ser *match,
+				    struct pci_dev *pdev)
+{
+	return match->devid == pci_dev_id(pdev) && match->pci_domain == pci_domain_nr(pdev->bus);
+}
+
+struct device_ser *iommu_get_device_preserved_data(struct device *dev)
+{
+	struct iommu_lu_flb_obj *obj;
+	struct devices_ser *devices;
+	int ret, i, idx;
+
+	if (!dev_is_pci(dev))
+		return NULL;
+
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&obj);
+	if (ret)
+		return NULL;
+
+	devices = __va(obj->ser->devices_phys);
+	for (i = 0, idx = 0; i < obj->ser->nr_devices; ++i, ++idx) {
+		if (idx >= MAX_DEVICE_SERS) {
+			devices = __va(devices->objs.next_objs);
+			idx = 0;
+		}
+
+		if (devices->devices[idx].obj.deleted)
+			continue;
+
+		if (device_ser_match(&devices->devices[idx], to_pci_dev(dev))) {
+			devices->devices[idx].obj.incoming = true;
+			return &devices->devices[idx];
+		}
+	}
+
+	return NULL;
+}
+EXPORT_SYMBOL(iommu_get_device_preserved_data);
+
+struct iommu_ser *iommu_get_preserved_data(u64 token, enum iommu_lu_type type)
+{
+	struct iommu_lu_flb_obj *obj;
+	struct iommus_ser *iommus;
+	int ret, i, idx;
+
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&obj);
+	if (ret)
+		return NULL;
+
+	iommus = __va(obj->ser->iommus_phys);
+	for (i = 0, idx = 0; i < obj->ser->nr_iommus; ++i, ++idx) {
+		if (idx >= MAX_IOMMU_SERS) {
+			iommus = __va(iommus->objs.next_objs);
+			idx = 0;
+		}
+
+		if (iommus->iommus[idx].obj.deleted)
+			continue;
+
+		if (iommus->iommus[idx].token == token &&
+		    iommus->iommus[idx].type == type)
+			return &iommus->iommus[idx];
+	}
+
+	return NULL;
+}
+EXPORT_SYMBOL(iommu_get_preserved_data);
+
+static int reserve_obj_ser(struct iommu_objs_ser **objs_ptr, u64 max_objs)
+{
+	struct iommu_objs_ser *next_objs, *objs = *objs_ptr;
+	int idx;
+
+	if (objs->nr_objs == max_objs) {
+		next_objs = kho_alloc_preserve(PAGE_SIZE);
+		if (IS_ERR(next_objs))
+			return PTR_ERR(next_objs);
+
+		objs->next_objs = virt_to_phys(next_objs);
+		objs = next_objs;
+		*objs_ptr = objs;
+		objs->nr_objs = 0;
+		objs->next_objs = 0;
+	}
+
+	idx = objs->nr_objs++;
+	return idx;
+}
+
+int iommu_domain_preserve(struct iommu_domain *domain, struct iommu_domain_ser **ser)
+{
+	struct iommu_domain_ser *domain_ser;
+	struct iommu_lu_flb_obj *flb_obj;
+	int idx, ret;
+
+	if (!domain->ops->preserve)
+		return -EOPNOTSUPP;
+
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&flb_obj->lock);
+	idx = reserve_obj_ser((struct iommu_objs_ser **)&flb_obj->iommu_domains,
+			      MAX_IOMMU_DOMAIN_SERS);
+	if (idx < 0)
+		return idx;
+
+	domain_ser = &flb_obj->iommu_domains->iommu_domains[idx];
+	idx = flb_obj->ser->nr_domains++;
+	domain_ser->obj.idx = idx;
+	domain_ser->obj.ref_count = 1;
+
+	ret = domain->ops->preserve(domain, domain_ser);
+	if (ret) {
+		domain_ser->obj.deleted = true;
+		return ret;
+	}
+
+	domain->preserved_state = domain_ser;
+	*ser = domain_ser;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(iommu_domain_preserve);
+
+void iommu_domain_unpreserve(struct iommu_domain *domain)
+{
+	struct iommu_domain_ser *domain_ser;
+	struct iommu_lu_flb_obj *flb_obj;
+	int ret;
+
+	if (!domain->ops->unpreserve)
+		return;
+
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
+	if (ret)
+		return;
+
+	guard(mutex)(&flb_obj->lock);
+
+	/*
+	 * There is no check for attached devices here. The correctness relies
+	 * on the Live Update Orchestrator's session lifecycle. All resources
+	 * (iommufd, vfio devices) are preserved within a single session. If the
+	 * session is torn down, the .unpreserve callbacks for all files will be
+	 * invoked, ensuring a consistent cleanup without needing explicit
+	 * refcounting for the serialized objects here.
+	 */
+	domain_ser = domain->preserved_state;
+	domain->ops->unpreserve(domain, domain_ser);
+	domain_ser->obj.deleted = true;
+	domain->preserved_state = NULL;
+}
+EXPORT_SYMBOL_GPL(iommu_domain_unpreserve);
+
+static int iommu_preserve_locked(struct iommu_device *iommu)
+{
+	struct iommu_lu_flb_obj *flb_obj;
+	struct iommu_ser *iommu_ser;
+	int idx, ret;
+
+	if (!iommu->ops->preserve)
+		return -EOPNOTSUPP;
+
+	if (iommu->outgoing_preserved_state) {
+		iommu->outgoing_preserved_state->obj.ref_count++;
+		return 0;
+	}
+
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
+	if (ret)
+		return ret;
+
+	idx = reserve_obj_ser((struct iommu_objs_ser **)&flb_obj->iommus,
+			      MAX_IOMMU_SERS);
+	if (idx < 0)
+		return idx;
+
+	iommu_ser = &flb_obj->iommus->iommus[idx];
+	idx = flb_obj->ser->nr_iommus++;
+	iommu_ser->obj.idx = idx;
+	iommu_ser->obj.ref_count = 1;
+
+	ret = iommu->ops->preserve(iommu, iommu_ser);
+	if (ret)
+		iommu_ser->obj.deleted = true;
+
+	iommu->outgoing_preserved_state = iommu_ser;
+	return ret;
+}
+
+static void iommu_unpreserve_locked(struct iommu_device *iommu)
+{
+	struct iommu_ser *iommu_ser = iommu->outgoing_preserved_state;
+
+	iommu_ser->obj.ref_count--;
+	if (iommu_ser->obj.ref_count)
+		return;
+
+	iommu->outgoing_preserved_state = NULL;
+	iommu->ops->unpreserve(iommu, iommu_ser);
+	iommu_ser->obj.deleted = true;
+}
+
+int iommu_preserve_device(struct iommu_domain *domain,
+			  struct device *dev, u64 token)
+{
+	struct iommu_lu_flb_obj *flb_obj;
+	struct device_ser *device_ser;
+	struct dev_iommu *iommu;
+	struct pci_dev *pdev;
+	int ret, idx;
+
+	if (!dev_is_pci(dev))
+		return -EOPNOTSUPP;
+
+	if (!domain->preserved_state)
+		return -EINVAL;
+
+	pdev = to_pci_dev(dev);
+	iommu = dev->iommu;
+	if (!iommu->iommu_dev->ops->preserve_device ||
+	    !iommu->iommu_dev->ops->preserve)
+		return -EOPNOTSUPP;
+
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
+	if (ret)
+		return ret;
+
+	guard(mutex)(&flb_obj->lock);
+	idx = reserve_obj_ser((struct iommu_objs_ser **)&flb_obj->devices,
+			      MAX_DEVICE_SERS);
+	if (idx < 0)
+		return idx;
+
+	device_ser = &flb_obj->devices->devices[idx];
+	idx = flb_obj->ser->nr_devices++;
+	device_ser->obj.idx = idx;
+	device_ser->obj.ref_count = 1;
+
+	ret = iommu_preserve_locked(iommu->iommu_dev);
+	if (ret) {
+		device_ser->obj.deleted = true;
+		return ret;
+	}
+
+	device_ser->domain_iommu_ser.domain_phys = __pa(domain->preserved_state);
+	device_ser->domain_iommu_ser.iommu_phys = __pa(iommu->iommu_dev->outgoing_preserved_state);
+	device_ser->devid = pci_dev_id(pdev);
+	device_ser->pci_domain = pci_domain_nr(pdev->bus);
+	device_ser->token = token;
+
+	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
+	if (ret) {
+		device_ser->obj.deleted = true;
+		iommu_unpreserve_locked(iommu->iommu_dev);
+		return ret;
+	}
+
+	dev->iommu->device_ser = device_ser;
+	return 0;
+}
+
+void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
+{
+	struct iommu_lu_flb_obj *flb_obj;
+	struct device_ser *device_ser;
+	struct dev_iommu *iommu;
+	struct pci_dev *pdev;
+	int ret;
+
+	if (!dev_is_pci(dev))
+		return;
+
+	pdev = to_pci_dev(dev);
+	iommu = dev->iommu;
+	if (!iommu->iommu_dev->ops->unpreserve_device ||
+	    !iommu->iommu_dev->ops->unpreserve)
+		return;
+
+	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
+	if (WARN_ON(ret))
+		return;
+
+	guard(mutex)(&flb_obj->lock);
+	device_ser = dev_iommu_preserved_state(dev);
+	if (WARN_ON(!device_ser))
+		return;
+
+	iommu->iommu_dev->ops->unpreserve_device(dev, device_ser);
+	dev->iommu->device_ser = NULL;
+
+	iommu_unpreserve_locked(iommu->iommu_dev);
+}
