@@ -124,6 +124,7 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 	u32 restore_token = 0;
 
 #ifdef CONFIG_LIVEUPDATE
+	/* TODO: Find better way of getting back the token. */
 	if (dev_is_pci(vdev->dev)) {
 		pci_device = container_of(vdev, struct vfio_pci_core_device, vdev);
 		if (pci_device->liveupdate_state)
