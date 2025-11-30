@@ -72,60 +72,6 @@ error:
 	return ret;
 }
 
-static int restore_iommu_context(struct intel_iommu *iommu)
-{
-	struct context_entry *context;
-	int i, ret = 0;
-
-	for (i = 0; i < ROOT_ENTRY_NR; i++) {
-		context = iommu_context_addr(iommu, i, 0, 0);
-		if (context)
-			BUG_ON(!kho_restore_folio(virt_to_phys(context)));
-
-		if (!sm_supported(iommu))
-			continue;
-
-		context = iommu_context_addr(iommu, i, 0x80, 0);
-		if (context)
-			BUG_ON(!kho_restore_folio(virt_to_phys(context)));
-	}
-
-	return ret;
-}
-
-static int __restore_used_domain_ids(struct device_ser *ser, void *arg)
-{
-	int id = ser->domain_iommu_ser.did;
-	struct intel_iommu *iommu = arg;
-
-	ida_alloc_range(&iommu->domain_ida, id, id, GFP_KERNEL);
-	return 0;
-}
-
-int intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
-					      struct iommu_ser *iommu_ser)
-{
-	int ret;
-
-	if (!iommu_ser)
-		return -ENOENT;
-
-	iommu->root_entry = __va(iommu_ser->intel.root_table);
-
-	ret = restore_iommu_context(iommu);
-	if (ret) {
-		WARN_ONCE(ret, "Cannot restore iommu [%llx] root context\n", iommu->reg_phys);
-		folio_put(virt_to_folio(iommu->root_entry));
-		iommu->root_entry = NULL;
-	}
-
-	iommu_for_each_preserved_device(__restore_used_domain_ids, iommu);
-	pr_info("Restored IOMMU[0x%llx] Root Table at: 0x%llx\n",
-		iommu->reg_phys, iommu_ser->intel.root_table);
-
-	return ret;
-}
-
 int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_ser)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
@@ -137,6 +83,8 @@ int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_se
 		return -EINVAL;
 
 	device_ser->domain_iommu_ser.did = domain_id_iommu(info->domain, info->iommu);
+
+	/* TODO: Add support preservation of PASIDs. */
 	return 0;
 }
 
@@ -177,4 +125,3 @@ err:
 void intel_iommu_unpreserve(struct iommu_device *iommu, struct iommu_ser *iommu_ser)
 {
 }
-
