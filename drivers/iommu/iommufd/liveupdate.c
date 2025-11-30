@@ -290,9 +290,101 @@ static int iommufd_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	return -EOPNOTSUPP;
 }
 
+int iommufd_hwpt_lu_restore(struct iommufd_ucmd *ucmd)
+{
+	struct iommu_hwpt_lu_restore *cmd = ucmd->cmd;
+	struct iommufd_hwpt_paging *hwpt = NULL;
+	struct iommufd_ctx *ictx = ucmd->ictx;
+	struct iommu_domain_ser *domain_ser;
+	struct iommufd_hwpt_lu *hwpt_lu;
+	struct iommufd_lu *iommufd_lu;
+	struct iommu_domain *domain;
+	unsigned int i;
+	int rc;
+
+	iommufd_lu = ictx->lu;
+	if (!iommufd_lu)
+		return -ENOTTY;
+
+	for (i = 0; i < iommufd_lu->nr_hwpts; i++) {
+		hwpt_lu = &iommufd_lu->hwpts[i];
+
+		if (hwpt_lu->reclaimed)
+			continue;
+
+		if (hwpt_lu->token == cmd->hwpt_token)
+			goto hwpt_found;
+	}
+
+	return -ENOENT;
+
+hwpt_found:
+	hwpt = _iommufd_hwpt_paging_alloc(ictx);
+	if (IS_ERR(hwpt))
+		return PTR_ERR(hwpt);
+
+	domain_ser = __va(hwpt_lu->domain_data);
+	domain = domain_ser->restored_domain;
+	if (!domain) {
+		rc = -ENOENT;
+		goto err_destroy;
+	}
+
+	iommufd_hwpt_init_from_domain(&hwpt->common, domain);
+	iommufd_object_finalize(ictx, &hwpt->common.obj);
+
+	hwpt_lu->reclaimed = true;
+	hwpt->lu_restored = true;
+	cmd->pt_id = hwpt->common.obj.id;
+	return 0;
+
+err_destroy:
+	iommufd_object_abort_and_destroy(ictx, &hwpt->common.obj);
+	return rc;
+}
+
 static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
-	return false;
+	struct iommufd_hwpt_paging *hwpt;
+	struct iommufd_hwpt_lu *hwpt_lu;
+	struct iommufd_lu *iommufd_lu;
+	struct iommufd_object *obj;
+	struct iommufd_ctx *ictx;
+	unsigned long index;
+	unsigned int i;
+
+	if (!args->retrieved || !args->file) {
+		pr_warn("%s: fd not reclaimed\n", __func__);
+		return false;
+	}
+
+	ictx = iommufd_ctx_from_file(args->file);
+	iommufd_lu = ictx->lu;
+
+	for (i = 0; i < iommufd_lu->nr_hwpts; i++) {
+		hwpt_lu = &iommufd_lu->hwpts[i];
+
+		if (!hwpt_lu->reclaimed)
+			return false;
+	}
+
+	xa_lock(&ictx->objects);
+	xa_for_each(&ictx->objects, index, obj) {
+		if (obj->type != IOMMUFD_OBJ_HWPT_PAGING)
+			continue;
+
+		hwpt = container_of(obj, struct iommufd_hwpt_paging, common.obj);
+		if (!hwpt->lu_restored)
+			continue;
+
+		if (!hwpt->common.domain || iommu_domain_has_attachments(hwpt->common.domain)) {
+			xa_unlock(&ictx->objects);
+			return false;
+		}
+	}
+	xa_unlock(&ictx->objects);
+
+	return true;
 }
 
 static void iommufd_liveupdate_finish(struct liveupdate_file_op_args *args)
