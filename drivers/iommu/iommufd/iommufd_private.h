@@ -386,6 +386,7 @@ struct iommufd_hwpt_paging {
 	bool nest_parent : 1;
 #ifdef CONFIG_LIVEUPDATE
 	bool lu_preserved : 1;
+	bool lu_restored : 1;
 	u32 lu_token;
 #endif
 	/* Head at iommufd_ioas::hwpt_list */
