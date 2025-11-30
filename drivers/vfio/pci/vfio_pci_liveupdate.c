@@ -108,9 +108,12 @@
 #include <linux/kho/abi/vfio_pci.h>
 #include <linux/liveupdate.h>
 #include <linux/errno.h>
+#include <linux/iommufd.h>
 #include <linux/vfio.h>
 
 #include "vfio_pci_priv.h"
+
+MODULE_IMPORT_NS("IOMMUFD");
 
 static bool vfio_pci_liveupdate_can_preserve(struct liveupdate_file_handler *handler,
 					     struct file *file)
@@ -147,15 +150,31 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	struct vfio_device *device = vfio_device_from_file(args->file);
 	struct vfio_pci_core_device_ser *ser;
 	struct vfio_pci_core_device *vdev;
+	u64 token, preserved_state;
 	struct pci_dev *pdev;
 	int ret;
 
 	vdev = container_of(device, struct vfio_pci_core_device, vdev);
 	pdev = vdev->pdev;
 
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	/* If iommufd is attached, preserve the underlying domain */
+	mutex_lock(&device->dev_set->lock);
+	if (device->iommufd_attached) {
+		ret = iommufd_device_preserve(args->session,
+						  device->iommufd_device,
+						  &token, &preserved_state);
+		if (ret) {
+			mutex_unlock(&device->dev_set->lock);
+			return ret;
+                }
+	}
+	mutex_unlock(&device->dev_set->lock);
+#endif
+
 	ret = pci_liveupdate_preserve(pdev);
 	if (ret)
-		return ret;
+		goto err_iommufd_unpreserve;
 
 	ser = kho_alloc_preserve(sizeof(*ser));
 	if (IS_ERR(ser)) {
@@ -170,6 +189,9 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	args->serialized_data = virt_to_phys(ser);
 	return 0;
 
+err_iommufd_unpreserve:
+	iommufd_device_unpreserve(args->session, device->iommufd_device);
+
 err_unpreserve:
 	pci_liveupdate_unpreserve(pdev);
 	return ret;
@@ -178,6 +200,14 @@ err_unpreserve:
 static void vfio_pci_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 {
 	struct vfio_device *device = vfio_device_from_file(args->file);
+	struct vfio_pci_core_device_ser *ser;
+
+	ser = phys_to_virt(args->serialized_data);
+	mutex_lock(&device->dev_set->lock);
+	if (device->iommufd_attached)
+		iommufd_device_unpreserve(args->session,
+					  device->iommufd_device);
+	mutex_unlock(&device->dev_set->lock);
 
 	pci_liveupdate_unpreserve(to_pci_dev(device->dev));
 	kho_unpreserve_free(phys_to_virt(args->serialized_data));
