@@ -264,7 +264,7 @@ struct iommu_device_ser *iommu_get_device_preserved_data(struct device *dev)
 }
 EXPORT_SYMBOL(iommu_get_device_preserved_data);
 
-struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_lu_type type)
+struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser type)
 {
 	struct iommu_flb_obj *flb_obj;
 	struct iommu_hw_array_ser *array;
