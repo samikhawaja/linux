@@ -38,7 +38,17 @@
  */
 #define VFIO_PCI_SER_RESET_WORKS	BIT(0)
 
-#define VFIO_PCI_SER_KNOWN_FLAGS	VFIO_PCI_SER_RESET_WORKS
+/**
+ * define VFIO_PCI_SER_IOMMUFD - Device was preserved with its iommufd state.
+ *
+ * Set in &vfio_pci_core_device_ser.flags when the device was not in noiommu
+ * mode and its iommufd state was preserved. The LUO token of the preserved
+ * iommufd is stored in &vfio_pci_core_device_ser.iommufd_token.
+ */
+#define VFIO_PCI_SER_IOMMUFD		BIT(1)
+
+#define VFIO_PCI_SER_KNOWN_FLAGS	(VFIO_PCI_SER_RESET_WORKS | \
+					 VFIO_PCI_SER_IOMMUFD)
 
 /**
  * struct vfio_pci_core_device_ser - Serialized state of a single VFIO PCI
@@ -54,6 +64,8 @@
  * @saved_state_size: Size in bytes of the serialized &struct pci_saved_state_ser
  *                    blob stored in @data after ``config_map``, or 0 if none.
  * @reserved: Reserved for future use; must be 0.
+ * @iommufd_token: LUO token of the preserved iommufd, valid only when
+ *                 ``VFIO_PCI_SER_IOMMUFD`` is set in @flags.
  * @data: Variable-length payload containing, in order:
  *        1. ``u8 vconfig[@cfg_size]`` — VFIO virtualized config space snapshot
  *           captured during ``freeze()``.
@@ -70,6 +82,7 @@ struct vfio_pci_core_device_ser {
 	u32 flags;
 	u32 saved_state_size;
 	u32 reserved;
+	u64 iommufd_token;
 	u8 data[];
 } __packed;
 
