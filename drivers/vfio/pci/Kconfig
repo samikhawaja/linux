@@ -44,12 +44,15 @@ config VFIO_PCI_IGD
 	  To enable Intel IGD assignment through vfio-pci, say Y.
 
 config VFIO_PCI_LIVEUPDATE
-	bool "VFIO PCI support for Live Update in no-iommu mode"
-	depends on PCI_LIVEUPDATE && VFIO_NOIOMMU && VFIO_DEVICE_CDEV
+	bool "VFIO PCI support for Live Update"
+	depends on PCI_LIVEUPDATE && VFIO_DEVICE_CDEV
+	depends on VFIO_NOIOMMU || IOMMU_LIVEUPDATE
 	help
-	  Support for preserving devices bound to vfio-pci in no-iommu mode
-	  across a Live Update. It enables a device to continue working (DMA)
-	  while host kernel is going through a kexec live update.
+	  Support for preserving devices bound to vfio-pci across a Live
+	  Update. It enables a device to continue working (DMA) while host
+	  kernel is going through a kexec live update. Devices in no-iommu
+	  mode need VFIO_NOIOMMU, and IOMMU-backed devices need
+	  IOMMU_LIVEUPDATE to preserve their IOMMU state.
 
 	  If you don't know what to do here, say N.
 

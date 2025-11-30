@@ -9,15 +9,16 @@
 /**
  * DOC: VFIO PCI Preservation via LUO
  *
- * VFIO PCI devices in noiommu mode can be preserved over a kexec using the Live
+ * VFIO PCI devices can be preserved over a kexec using the Live
  * Update Orchestrator (LUO) file preservation while keeping the device running
  * and performing DMA across the kexec transition. This allows userspace (such
  * as a VMM or userspace driver) to transfer an in-use device to the next kernel
  * without resetting it.
  *
  * .. note::
- *    This support is enabled by ``CONFIG_VFIO_PCI_LIVEUPDATE`` and is limited
- *    to devices in noiommu mode (see Restrictions below).
+ *    This support is enabled by ``CONFIG_VFIO_PCI_LIVEUPDATE``. Devices in
+ *    noiommu mode are supported. IOMMU-backed devices are supported when
+ *    ``CONFIG_IOMMU_LIVEUPDATE`` is enabled (see Restrictions below).
  *
  * Usage Example
  * =============
@@ -54,15 +55,22 @@
  *
  * The kernel imposes the following restrictions when preserving VFIO devices:
  *
- *  * The device must be bound to the ``vfio-pci`` driver (not a variant driver)
- *    and registered in **noiommu** mode (``vfio.enable_unsafe_noiommu_mode=1``
- *    with no IOMMU group attached to the device). Attempting to preserve an
- *    IOMMU-backed device fails with ``-EOPNOTSUPP``.
+ *  * The device must be bound to the ``vfio-pci`` driver (not a variant driver).
+ *
+ *  * A device in **noiommu** mode (``vfio.enable_unsafe_noiommu_mode=1`` with
+ *    no IOMMU group attached to the device) is preserved on its own.
+ *
+ *  * An IOMMU-backed device is preserved together with its iommufd state. The
+ *    device must be attached to a HWPT marked for preservation with
+ *    ``IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE``, and the iommufd must be preserved
+ *    in the same session before the device. Otherwise preserving the device
+ *    fails. After kexec, the device can only be retrieved if the iommufd it
+ *    was preserved with can be retrieved.
  *
  *  * The device file descriptor must be obtained by opening the VFIO character
- *    device (``/dev/vfio/devices/noiommu-vfioX``) and not via
- *    ``VFIO_GROUP_GET_DEVICE_FD``, and ``VFIO_DEVICE_BIND_IOMMUFD`` must have
- *    completed on that file descriptor before it is preserved.
+ *    device (``/dev/vfio/devices/vfioX`` or ``/dev/vfio/devices/noiommu-vfioX``)
+ *    and not via ``VFIO_GROUP_GET_DEVICE_FD``, and ``VFIO_DEVICE_BIND_IOMMUFD``
+ *    must have completed on that file descriptor before it is preserved.
  *
  *  * ``CONFIG_VFIO_PCI_ZDEV_KVM`` must not be enabled. This may be relaxed in
  *    the future.
@@ -189,6 +197,7 @@
 #include <linux/cleanup.h>
 #include <linux/errno.h>
 #include <linux/file.h>
+#include <linux/iommufd.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/vfio_pci.h>
 #include <linux/liveupdate.h>
@@ -201,6 +210,8 @@
 #include <linux/vfio.h>
 
 #include "vfio_pci_priv.h"
+
+MODULE_IMPORT_NS("IOMMUFD");
 
 static bool vfio_pci_liveupdate_can_preserve(struct liveupdate_file_handler *handler,
 					     struct file *file)
@@ -245,11 +256,10 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	struct vfio_pci_core_device *vdev;
 	size_t saved_size = 0, total_size;
 	struct pci_dev *pdev;
+	u64 iommufd_token = 0;
+	u32 flags = 0;
 	u16 cfg_size;
 	int err;
-
-	if (!vfio_device_is_noiommu(device))
-		return -EOPNOTSUPP;
 
 	vdev = container_of(device, struct vfio_pci_core_device, vdev);
 	pdev = vdev->pdev;
@@ -263,56 +273,89 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	if (!vfio_file_is_bound_cdev(args->file))
 		return -EINVAL;
 
+	/*
+	 * Devices that are not in noiommu mode are preserved together with
+	 * their iommufd state, so that their DMA keeps being translated across
+	 * kexec.
+	 */
+	if (!vfio_device_is_noiommu(device)) {
+		err = iommufd_device_preserve(args->session,
+					      device->iommufd_device,
+					      &iommufd_token);
+		if (err)
+			return err;
+
+		flags |= VFIO_PCI_SER_IOMMUFD;
+	}
+
 	if (vdev->pci_saved_state) {
 		saved_size = pci_liveupdate_saved_state_ser_size(vdev->pci_saved_state);
-		if (!saved_size)
-			return -EINVAL;
+		if (!saved_size) {
+			err = -EINVAL;
+			goto err_iommufd_unpreserve;
+		}
 	}
 
 	total_size = size_add(sizeof(*ser),
 			      size_add(size_mul(2, cfg_size), saved_size));
-	if (total_size > U32_MAX)
-		return -EOVERFLOW;
+	if (total_size > U32_MAX) {
+		err = -EOVERFLOW;
+		goto err_iommufd_unpreserve;
+	}
 
 	ser = kho_alloc_preserve(total_size);
-	if (IS_ERR(ser))
-		return PTR_ERR(ser);
+	if (IS_ERR(ser)) {
+		err = PTR_ERR(ser);
+		goto err_iommufd_unpreserve;
+	}
 
 	if (saved_size) {
 		void *dst = ser->data + 2 * (size_t)cfg_size;
 
 		err = pci_liveupdate_serialize_saved_state(vdev->pci_saved_state,
 							   dst, saved_size);
-		if (err) {
-			kho_unpreserve_free(ser);
-			return err;
-		}
+		if (err)
+			goto err_free;
 	}
 
 	err = pci_liveupdate_preserve(pdev);
-	if (err) {
-		kho_unpreserve_free(ser);
-		return err;
-	}
+	if (err)
+		goto err_free;
 
 	ser->domain = pci_domain_nr(pdev->bus);
 	ser->bdf = pci_dev_id(pdev);
 	ser->cfg_size = cfg_size;
 	ser->size = total_size;
-	ser->flags = vdev->reset_works ? VFIO_PCI_SER_RESET_WORKS : 0;
+	ser->flags = flags;
+	if (vdev->reset_works)
+		ser->flags |= VFIO_PCI_SER_RESET_WORKS;
 	ser->saved_state_size = saved_size;
 	ser->reserved = 0;
+	ser->iommufd_token = iommufd_token;
 
 	args->serialized_data = virt_to_phys(ser);
 	return 0;
+
+err_free:
+	kho_unpreserve_free(ser);
+err_iommufd_unpreserve:
+	if (flags & VFIO_PCI_SER_IOMMUFD)
+		iommufd_device_unpreserve(args->session, device->iommufd_device);
+	return err;
 }
 
 static void vfio_pci_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 {
+	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
 	struct vfio_device *device = vfio_device_from_file(args->file);
+	bool iommufd = ser->flags & VFIO_PCI_SER_IOMMUFD;
+
+	guard(mutex)(&device->dev_set->lock);
 
 	pci_liveupdate_unpreserve(to_pci_dev(device->dev));
-	kho_unpreserve_free(phys_to_virt(args->serialized_data));
+	kho_unpreserve_free(ser);
+	if (iommufd)
+		iommufd_device_unpreserve(args->session, device->iommufd_device);
 }
 
 static int vfio_pci_liveupdate_freeze(struct liveupdate_file_op_args *args)
@@ -486,6 +529,28 @@ vfio_pci_liveupdate_attach_incoming(struct vfio_pci_core_device *vdev,
 	return 0;
 }
 
+/*
+ * A device preserved with its iommufd state can only be retrieved together
+ * with that iommufd, so fetch it using the saved token and fail if it can't be
+ * retrieved.
+ */
+static int vfio_pci_liveupdate_retrieve_iommufd(struct liveupdate_session *s,
+						const struct vfio_pci_core_device_ser *ser)
+{
+	struct file *file;
+	int ret;
+
+	if (!IS_ENABLED(CONFIG_IOMMU_LIVEUPDATE))
+		return -EOPNOTSUPP;
+
+	ret = liveupdate_get_file_incoming(s, ser->iommufd_token, &file);
+	if (ret)
+		return ret;
+
+	fput(file);
+	return 0;
+}
+
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
 	struct pci_saved_state *saved_state = NULL;
@@ -513,7 +578,11 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	vdev = container_of(device, struct vfio_pci_core_device, vdev);
 	pdev = vdev->pdev;
 
-	if (!vfio_device_is_noiommu(device)) {
+	if (ser->flags & VFIO_PCI_SER_IOMMUFD) {
+		ret = vfio_pci_liveupdate_retrieve_iommufd(args->session, ser);
+		if (ret)
+			goto out_put_dev;
+	} else if (!vfio_device_is_noiommu(device)) {
 		ret = -EOPNOTSUPP;
 		goto out_put_dev;
 	}
