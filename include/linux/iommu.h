@@ -14,6 +14,7 @@
 #include <linux/err.h>
 #include <linux/of.h>
 #include <linux/iova_bitmap.h>
+#include <linux/atomic.h>
 #include <linux/kho/abi/iommu.h>
 #include <uapi/linux/iommufd.h>
 
@@ -887,7 +888,7 @@ struct dev_iommu {
 	u32				require_direct:1;
 	u32				shadow_on_flush:1;
 #ifdef CONFIG_IOMMU_LIVEUPDATE
-	struct iommu_device_ser		*device_ser;
+	struct iommu_device_ser *device_ser;
 #endif
 };
 
