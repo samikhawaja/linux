@@ -18,6 +18,7 @@
 #include <linux/errno.h>
 #include <linux/host1x_context_bus.h>
 #include <linux/iommu.h>
+#include <linux/iommu-liveupdate.h>
 #include <linux/iommufd.h>
 #include <linux/idr.h>
 #include <linux/err.h>
@@ -626,8 +627,8 @@ DEFINE_MUTEX(iommu_probe_device_lock);
 
 static int __iommu_probe_device(struct device *dev, struct list_head *group_list)
 {
+	struct group_device *gdev, *gdev2;
 	struct iommu_group *group;
-	struct group_device *gdev;
 	int ret;
 
 	/*
@@ -659,6 +660,13 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 	if (IS_ERR(gdev)) {
 		ret = PTR_ERR(gdev);
 		goto err_put_group;
+	}
+
+	for_each_group_device(group, gdev2) {
+		if (dev_iommu_has_preserved_state(gdev2->dev)) {
+			ret = -EBUSY;
+			goto err_free_gdev;
+		}
 	}
 
 	/*
@@ -697,6 +705,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 
 err_remove_gdev:
 	list_del(&gdev->list);
+err_free_gdev:
 	__iommu_group_free_device(group, gdev);
 err_put_group:
 	iommu_deinit_device(dev);
@@ -3542,6 +3551,27 @@ bool iommu_group_dma_owner_claimed(struct iommu_group *group)
 	return user;
 }
 EXPORT_SYMBOL_GPL(iommu_group_dma_owner_claimed);
+
+/**
+ * iommu_group_device_count() - Get the number of devices in a group
+ * @group: The group.
+ *
+ * The device count may change after this function returns, as devices can
+ * be added to or removed from the group. The caller must recheck it if it
+ * needs the count to stay the same.
+ *
+ * Return: the number of devices in the group.
+ */
+size_t iommu_group_device_count(struct iommu_group *group)
+{
+	size_t count;
+
+	mutex_lock(&group->mutex);
+	count = list_count_nodes(&group->devices);
+	mutex_unlock(&group->mutex);
+
+	return count;
+}
 
 static void iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
 				   struct iommu_domain *domain)
