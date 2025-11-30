@@ -68,12 +68,17 @@ static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain 
 int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 				    void *arg);
 struct iommu_device_ser *iommu_get_device_preserved_data(struct device *dev);
-struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_lu_type type);
+struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser type);
 int iommu_domain_preserve(struct iommu_domain *domain, struct iommu_domain_ser **ser);
 void iommu_domain_unpreserve(struct iommu_domain *domain);
 int iommu_preserve_device(struct iommu_domain *domain,
 			  struct device *dev, u64 *preserved_state);
 void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
+
+static inline void *iommu_preserved_state(struct iommu_device *iommu)
+{
+	return iommu->outgoing_preserved_state;
+}
 #else
 static inline void *dev_iommu_preserved_state(struct device *dev)
 {
@@ -127,6 +132,11 @@ static inline int iommu_preserve_device(struct iommu_domain *domain,
 
 static inline void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 {
+}
+
+static inline void *iommu_preserved_state(struct iommu_device *iommu)
+{
+	return NULL;
 }
 #endif
 
