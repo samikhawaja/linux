@@ -340,6 +340,11 @@ static int iommu_preserve_locked(struct iommu_device *iommu,
 
 	lockdep_assert_held(&flb_obj->lock);
 	if (iommu->outgoing_preserved_state) {
+		ret = iommu->ops->preserve(iommu,
+					   iommu->outgoing_preserved_state);
+		if (ret)
+			return ret;
+
 		iommu->outgoing_preserved_state->hdr.ref_count++;
 		return 0;
 	}
