@@ -33,11 +33,8 @@
  * Top Level (struct iommu_flb_ser):
  * +---------------------------+
  * | - iommu_array_phys        |
- * | - nr_iommus               |
  * | - iommu_domain_array_phys |
- * | - nr_domains              |
  * | - device_array_phys       |
- * | - nr_devices              |
  * +---------------------------+
  *
  * Each Array contains the serialized objects of the respective type. For
@@ -61,7 +58,6 @@
  *   | iommu_domain_ser            |
  *   | +-------------------------+ |
  *   | | hdr (iommu_hdr_ser)     | |
- *   | | - idx                   | |
  *   | | - ref_count             | |
  *   | | - deleted / incoming    | |
  *   | +-------------------------+ |
@@ -81,13 +77,11 @@ enum iommu_lu_type {
 
 /**
  * struct iommu_hdr_ser - Common header for all serialized IOMMU objects
- * @idx: Index of the object in preserved state
  * @ref_count: Reference count for the object
  * @deleted: Flag indicating if the object is deleted
  * @incoming: Flag indicating if the object was preserved in previous kernel
  */
 struct iommu_hdr_ser {
-	u32 idx;
 	u32 ref_count;
 	u32 deleted:1;
 	u32 incoming:1;
@@ -187,13 +181,6 @@ struct iommu_device_array_ser {
 	struct iommu_array_hdr_ser hdr;
 	struct iommu_device_ser objects[];
 } __packed;
-
-#define MAX_IOMMU_HW_SERS_PER_PAGE \
-	((PAGE_SIZE - (sizeof(struct iommu_array_hdr_ser)) / sizeof(struct iommu_hw_ser)))
-#define MAX_IOMMU_DOMAIN_SERS_PER_PAGE \
-	((PAGE_SIZE - (sizeof(struct iommu_array_hdr_ser)) / sizeof(struct iommu_domain_ser)))
-#define MAX_IOMMU_DEVICE_SERS_PER_PAGE \
-	((PAGE_SIZE - (sizeof(struct iommu_array_hdr_ser)) / sizeof(struct iommu_device_ser)))
 
 /**
  * struct iommu_flb_ser - Top-level serialization structure
