@@ -3551,12 +3551,11 @@ static int __iommu_group_alloc_blocking_domain(struct iommu_group *group)
 	return 0;
 }
 
-static int __iommu_take_dma_ownership(struct iommu_group *group,
-				      void *owner, bool reclaim)
+static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner, bool transfer)
 {
 	int ret;
 
-	if (!reclaim &&
+	if (!transfer &&
 	    ((group->domain && group->domain != group->default_domain) ||
 	     !xa_empty(&group->pasid_array)))
 		return -EBUSY;
@@ -3598,7 +3597,7 @@ int iommu_group_claim_dma_owner(struct iommu_group *group, void *owner)
 		goto unlock_out;
 	}
 
-	ret = __iommu_take_dma_ownership(group, owner);
+	ret = __iommu_take_dma_ownership(group, owner, false);
 unlock_out:
 	mutex_unlock(&group->mutex);
 
@@ -3660,12 +3659,13 @@ unlock_out:
  * iommu_device_claim_dma_owner() - Set DMA ownership of a device
  * @dev: The device.
  * @owner: Caller specified pointer. Used for exclusive ownership.
+ * @transfer: Transfer ownership even if domain attached.
  *
  * Claim the DMA ownership of a device. Multiple devices in the same group may
  * concurrently claim ownership if they present the same owner value. Returns 0
  * on success and error code on failure
  */
-int iommu_device_claim_dma_owner(struct device *dev, void *owner)
+int iommu_device_claim_dma_owner(struct device *dev, void *owner, bool transfer)
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
