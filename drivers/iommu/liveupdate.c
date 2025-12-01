@@ -767,6 +767,16 @@ out:
 EXPORT_SYMBOL(iommu_init_device_preserved_data);
 
 /**
+ * iommu_finish_preserved_device() - Finish the preserved state of a device
+ * @dev: Target device
+ */
+void iommu_finish_preserved_device(struct device *dev)
+{
+	dev->iommu->device_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
+	WRITE_ONCE(dev->iommu->device_ser, NULL);
+}
+
+/**
  * iommu_restore_domain() - Restore a preserved domain for a device
  * @dev: Target device
  * @ser: Serialized device state
