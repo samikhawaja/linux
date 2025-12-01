@@ -79,6 +79,10 @@ struct vfio_device {
 	 * which must be set prior to registering the vfio_device.
 	 */
 	struct dentry *debug_root;
+
+#ifdef CONFIG_LIVEUPDATE
+	u32 preserved_iommufd_token;
+#endif
 };
 
 /**
