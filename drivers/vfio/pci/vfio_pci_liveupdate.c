@@ -292,6 +292,8 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 		goto out;
 	}
 
+	device->preserved_iommufd_token = ser->iommufd_ser.token;
+
 	args->file = file;
 out:
 	/* Drop the reference from vfio_find_device() */
