@@ -2254,6 +2254,14 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 	update_attachment_count(domain, true);
 	update_attachment_count(old, false);
 
+#if CONFIG_IOMMU_LIVEUPDATE
+	if (old && dev_iommu_restored_state(dev) &&
+	    iommu_domain_restored_state(old) &&
+	    domain->type != IOMMU_DOMAIN_BLOCKED &&
+	    domain->type != IOMMU_DOMAIN_IDENTITY)
+		iommu_finish_preserved_device(dev);
+#endif
+
 	dev->iommu->attach_deferred = 0;
 	trace_attach_device_to_domain(dev);
 	return 0;
@@ -2438,9 +2446,12 @@ static bool domain_iommu_ops_compatible(const struct iommu_ops *ops,
 static int __iommu_attach_group(struct iommu_domain *domain,
 				struct iommu_group *group)
 {
+	bool allow_replace = false;
 	struct device *dev;
 
-	if (group->domain && group->domain != group->default_domain &&
+	allow_replace = group->domain && iommu_domain_restored_state(group->domain);
+	if (!allow_replace && group->domain &&
+	    group->domain != group->default_domain &&
 	    group->domain != group->blocking_domain)
 		return -EBUSY;
 
