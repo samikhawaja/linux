@@ -2,6 +2,8 @@
 /*
  * Copyright (c) 2021-2022, NVIDIA CORPORATION & AFFILIATES
  */
+#include <linux/pci.h>
+#include <linux/vfio_pci_core.h>
 #include <linux/vfio.h>
 #include <linux/iommufd.h>
 
@@ -117,9 +119,20 @@ EXPORT_SYMBOL_GPL(vfio_iommufd_get_dev_id);
 int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 			       struct iommufd_ctx *ictx, u32 *out_device_id)
 {
+	struct vfio_pci_core_device *pci_device;
 	struct iommufd_device *idev;
+	u32 restore_token = 0;
 
-	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id);
+#ifdef CONFIG_LIVEUPDATE
+	/* TODO: Find better way of getting back the token. */
+	if (dev_is_pci(vdev->dev)) {
+		pci_device = container_of(vdev, struct vfio_pci_core_device, vdev);
+		if (pci_device->liveupdate_state)
+			restore_token = pci_device->liveupdate_state->iommufd_ser.token;
+	}
+#endif
+
+	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id, restore_token);
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 	vdev->iommufd_device = idev;
