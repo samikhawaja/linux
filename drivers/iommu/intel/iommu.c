@@ -3999,6 +3999,7 @@ const struct iommu_ops intel_iommu_ops = {
 	.page_response		= intel_iommu_page_response,
 #ifdef CONFIG_IOMMU_LIVEUPDATE
 	.preserve_device	= intel_iommu_preserve_device,
+	.unpreserve_device	= intel_iommu_unpreserve_device,
 	.preserve		= intel_iommu_preserve,
 	.unpreserve		= intel_iommu_unpreserve,
 #endif
