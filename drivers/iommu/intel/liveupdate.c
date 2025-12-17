@@ -14,6 +14,7 @@
 #include <linux/pci.h>
 
 #include "iommu.h"
+#include "pasid.h"
 #include "../iommu-pages.h"
 
 static void unpreserve_iommu_context(struct intel_iommu *iommu, int end)
@@ -113,9 +114,70 @@ void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 		iommu->reg_phys, iommu_ser->intel.root_table);
 }
 
+enum pasid_walk_op {
+	PASID_WALK_PRESERVE = 1,
+	PASID_WALK_UNPRESERVE,
+	PASID_WALK_RESTORE
+};
+
+static int pasid_lu_do_op(void *table, enum pasid_walk_op op)
+{
+	int ret = 0;
+
+	switch (op) {
+		case PASID_WALK_PRESERVE:
+			ret = iommu_preserve_page(table);
+			break;
+		case PASID_WALK_UNPRESERVE:
+			iommu_unpreserve_page(table);
+			break;
+		case PASID_WALK_RESTORE:
+			iommu_restore_page(virt_to_phys(table));
+			break;
+	}
+
+	return ret;
+}
+
+static int pasid_walk_table(struct pasid_dir_entry *dir, int max_pasid,
+			    enum pasid_walk_op op, int count)
+{
+	struct pasid_entry *table;
+	int ret, done_count = 0;
+	int i, max_pde;
+
+	max_pde = max_pasid >> PASID_PDE_SHIFT;
+	if (count > 0)
+		max_pde = count;
+
+	for (i = 0; i < max_pde; i++) {
+		table = get_pasid_table_from_pde(&dir[i]);
+		if (table) {
+			ret = pasid_lu_do_op(table, op);
+			if (ret)
+				goto err;
+		}
+		++done_count;
+	}
+
+	ret = pasid_lu_do_op(dir, op);
+	if (ret) {
+		done_count = max_pde;
+		goto err;
+	}
+
+	return 0;
+err:
+	pasid_walk_table(dir, max_pasid, PASID_WALK_UNPRESERVE, done_count);
+	return ret;
+}
+
+
 int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_ser)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct pasid_table *pasid_table;
+	int ret;
 
 	if (!dev_is_pci(dev))
 		return -EOPNOTSUPP;
@@ -125,7 +187,19 @@ int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_se
 
 	device_ser->domain_iommu_ser.did = domain_id_iommu(info->domain, info->iommu);
 
-	/* TODO: Add support preservation of PASIDs. */
+	if (!sm_supported(info->iommu))
+		return 0;
+
+	pasid_table = intel_pasid_get_table(dev);
+	if (!pasid_table)
+		return -EINVAL;
+
+	ret = pasid_walk_table(pasid_table->table, pasid_table->max_pasid, PASID_WALK_PRESERVE, -1);
+	if (ret)
+		return ret;
+
+	device_ser->intel.pasid_table = virt_to_phys(pasid_table->table);
+	device_ser->intel.max_pasid = pasid_table->max_pasid;
 	return 0;
 }
 
@@ -165,4 +239,16 @@ err:
 
 void intel_iommu_unpreserve(struct iommu_device *iommu, struct iommu_ser *iommu_ser)
 {
+}
+
+void *intel_pasid_try_restore_table(struct device *dev)
+{
+	struct device_ser *ser = dev_iommu_restored_state(dev);
+
+	if (!ser)
+		return NULL;
+
+	BUG_ON(pasid_walk_table(phys_to_virt(ser->intel.pasid_table),
+				ser->intel.max_pasid, PASID_WALK_RESTORE, -1));
+	return phys_to_virt(ser->intel.pasid_table);
 }
