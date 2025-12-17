@@ -50,6 +50,11 @@ struct device_domain_iommu_ser {
 	u64 iommu_phys;
 } __packed;
 
+struct device_intel_ser {
+	u64 pasid_table;
+	u64 max_pasid;
+} __packed;
+
 struct device_ser {
 	struct iommu_obj_ser obj;
 	u64 token;
@@ -57,6 +62,9 @@ struct device_ser {
 	u32 pci_domain;
 	struct device_domain_iommu_ser domain_iommu_ser;
 	enum iommu_lu_type type;
+	union {
+		struct device_intel_ser intel;
+	};
 } __packed;
 
 struct iommu_intel_ser {
