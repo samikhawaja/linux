@@ -1329,9 +1329,7 @@ static int dmar_domain_attach_device(struct dmar_domain *domain,
 	unsigned long flags;
 	int ret;
 
-#ifdef CONFIG_LIVEUPDATE
 	device_ser = dev_iommu_restored_state(dev);
-#endif
 
 	ret = domain_attach_iommu(domain, iommu,
 				  dev_iommu_restore_did(dev, &domain->domain));
