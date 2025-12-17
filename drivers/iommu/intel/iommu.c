@@ -2941,8 +2941,10 @@ static bool __maybe_clean_unpreserved_context_entries(struct intel_iommu *iommu)
 		if (info->iommu != iommu)
 			continue;
 
-		if (dev_iommu_preserved_state(&pdev->dev))
+		if (dev_iommu_preserved_state(&pdev->dev)) {
+			pasid_cleanup_preserved_table(&pdev->dev);
 			continue;
+		}
 
 		domain_context_clear(info);
 	}

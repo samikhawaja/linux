@@ -1305,6 +1305,7 @@ int intel_iommu_preserve(struct iommu_device *iommu, struct iommu_ser *iommu_ser
 void intel_iommu_unpreserve(struct iommu_device *iommu, struct iommu_ser *iommu_ser);
 void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 					       struct iommu_ser *iommu_ser);
+void pasid_cleanup_preserved_table(struct device *dev);
 #else
 static inline int intel_iommu_preserve_device(struct device *dev, struct device_ser *device_ser)
 {
@@ -1326,6 +1327,10 @@ static inline void intel_iommu_unpreserve(struct iommu_device *iommu, struct iom
 
 static inline void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 							     struct iommu_ser *iommu_ser)
+{
+}
+
+static inline void pasid_cleanup_preserved_table(struct device *dev)
 {
 }
 #endif
