@@ -483,16 +483,16 @@ static int iommu_init_device(struct device *dev)
 		goto err_free;
 	}
 
+#ifdef CONFIG_LIVEUPDATE
+	dev->iommu->device_ser = iommu_get_device_preserved_data(dev);
+#endif
+
 	iommu_dev = ops->probe_device(dev);
 	if (IS_ERR(iommu_dev)) {
 		ret = PTR_ERR(iommu_dev);
 		goto err_module_put;
 	}
 	dev->iommu->iommu_dev = iommu_dev;
-
-#ifdef CONFIG_LIVEUPDATE
-	dev->iommu->device_ser = iommu_get_device_preserved_data(dev);
-#endif
 
 	ret = iommu_device_link(iommu_dev, dev);
 	if (ret)
