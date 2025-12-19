@@ -22,6 +22,10 @@ extern const char *default_iommu_mode;
 struct dma_region {
 	struct list_head link;
 	void *vaddr;
+	struct {
+		int fd;
+		off_t offset;
+	} file;
 	iova_t iova;
 	u64 size;
 };
@@ -31,10 +35,12 @@ struct iommu {
 	int container_fd;
 	int iommufd;
 	u32 ioas_id;
+	u32 hwpt_id;
 	struct list_head dma_regions;
 };
 
 struct iommu *iommu_init(const char *iommu_mode);
+struct iommu *iommufd_iommu_init(int iommufd, u32 dev_id);
 void iommu_cleanup(struct iommu *iommu);
 
 int __iommu_map(struct iommu *iommu, struct dma_region *region);
