@@ -20,6 +20,8 @@
 #include <linux/iommu-dma.h>
 #include <linux/iova.h>
 #include <linux/irq.h>
+#include <linux/kexec_handover.h>
+#include <linux/kho/abi/dma_alloc.h>
 #include <linux/list_sort.h>
 #include <linux/memremap.h>
 #include <linux/mm.h>
@@ -922,6 +924,171 @@ static struct page **__iommu_dma_alloc_pages(struct device *dev,
 	return pages;
 }
 
+static int iommu_dma_preserve_alloc(struct device *dev, void *cpu_addr,
+				    size_t size, dma_addr_t dma_handle,
+				    gfp_t gfp, unsigned long attrs,
+				    u64 *state)
+{
+	size_t alloc_size = PAGE_ALIGN(size);
+	int count = alloc_size >> PAGE_SHIFT;
+	struct page *page = NULL, **pages = NULL;
+	struct dma_alloc_ser *ser;
+	int i, ret;
+
+	if (IS_ENABLED(CONFIG_DMA_DIRECT_REMAP))
+		return -EOPNOTSUPP;
+
+	if (is_vmalloc_addr(cpu_addr)) {
+		pages = dma_common_find_pages(cpu_addr);
+		if (!pages)
+			page = vmalloc_to_page(cpu_addr);
+	} else {
+		page = virt_to_page(cpu_addr);
+	}
+
+	ser = kho_alloc_preserve(sizeof(*ser) + sizeof(u64) * count);
+	if (!ser)
+		return -ENOMEM;
+
+	ser->iova = dma_handle;
+	ser->is_folio = true;
+	*state = virt_to_phys(ser);
+	if (page) {
+		ser->nr_pages = 1;
+		ser->is_contiguous = true;
+		ret = kho_preserve_folio(page_folio(page));
+		if (ret)
+			goto err;
+
+		return 0;
+	}
+
+	if (!pages) {
+		ret = -EINVAL;
+		goto err;
+	}
+
+	ser->nr_pages = count;
+	ser->is_contiguous = false;
+	for (i = 0; i < ser->nr_pages; ++i) {
+		ret = kho_preserve_folio(page_folio(pages[i]));
+		if (ret)
+			goto err_pages;
+
+		ser->page_phys[i] = page_to_phys(pages[i]);
+	}
+
+	return 0;
+
+err_pages:
+	for (--i; i >= 0; --i)
+		kho_unpreserve_folio(page_folio(pages[i]));
+err:
+	kho_unpreserve_free(ser);
+	return ret;
+}
+
+static void *iommu_dma_restore_alloc(struct device *dev, size_t size,
+				     dma_addr_t *dma_handle, gfp_t gfp,
+				     unsigned long attrs, u64 state)
+{
+	bool coherent = dev_is_dma_coherent(dev);
+	int ioprot = dma_info_to_prot(DMA_BIDIRECTIONAL, coherent, attrs);
+	struct iommu_domain *domain = iommu_get_dma_domain(dev);
+	struct iommu_dma_cookie *cookie = domain->iova_cookie;
+	struct dma_alloc_ser *ser;
+	void *cpu_addr = NULL;
+	struct page **pages;
+	size_t restore_size;
+	int ret;
+	int i;
+
+	ser = phys_to_virt(state);
+
+	pages = kvcalloc(ser->nr_pages, sizeof(**pages), gfp);
+	if (!pages)
+		goto err;
+
+	restore_size = 0;
+	for (i = 0; i < ser->nr_pages; ++i) {
+		if(WARN_ON_ONCE(!kho_restore_folio(ser->page_phys[i])))
+			goto err_pages;
+
+		pages[i] = phys_to_page(ser->page_phys[i]);
+		restore_size += folio_size(page_folio(pages[i]));
+	}
+
+	*dma_handle = ser->iova;
+	if (restore_size != size)
+		goto err_pages;
+
+	if (IS_ENABLED(CONFIG_DMA_DIRECT_REMAP) &&
+	    !gfpflags_allow_blocking(gfp) && !coherent)
+		goto err_pages;
+
+	gfp |= __GFP_ZERO;
+	if (!reserve_iova(&cookie->iovad,
+			  *dma_handle >> iova_shift(&cookie->iovad),
+			  (*dma_handle + size -1) >> iova_shift(&cookie->iovad)))
+		goto err_pages;
+
+	if (gfpflags_allow_blocking(gfp) &&
+	    !(attrs & DMA_ATTR_FORCE_CONTIGUOUS) &&
+	    !iommu_domain_is_direct_isolation(dev)) {
+		cpu_addr = iommu_dma_restore_realloc_remap(dev, pages, size,
+							   *dma_handle, gfp,
+							   dma_pgprot(dev,
+								      PAGE_KERNEL,
+								      attrs),
+							   attrs);
+		if (!cpu_addr)
+			goto err_iova;
+
+		return cpu_addr;
+	}
+
+/* CMA allocators are not supported. */
+#ifdef CONFIG_DMA_CMA
+	goto err_iova;
+#endif
+
+	if (page_size(*pages) != size)
+		goto err_iova;
+
+	if (!coherent || PageHighMem(*pages)) {
+		pgprot_t prot = dma_pgprot(dev, PAGE_KERNEL, attrs);
+
+		cpu_addr = dma_common_contiguous_remap(*pages, size,
+				prot, __builtin_return_address(0));
+		if (!cpu_addr)
+			goto err_iova;
+
+		if (!coherent)
+			arch_dma_prep_coherent(*pages, size);
+	} else {
+		cpu_addr = page_address(*pages);
+	}
+
+	ret = iommu_map(domain, *dma_handle, page_to_phys(*pages), size,
+			ioprot, GFP_ATOMIC);
+	if (ret)
+		goto err_iommu_map;
+
+	kho_restore_free(ser);
+	return cpu_addr;
+
+err_iommu_map:
+	if (!coherent || PageHighMem(*pages))
+		dma_common_free_remap(cpu_addr, size);
+err_iova:
+	iommu_dma_free_iova(cookie, *dma_handle, size, NULL);
+err_pages:
+	kvfree(pages);
+err:
+	kho_restore_free(ser);
+	return NULL;
+}
+
 static int __iommu_dma_map_noncontiguous(struct device *dev, struct page **pages,
 					 unsigned long iova, size_t size, struct sg_table *sgt,
 					 gfp_t gfp, pgprot_t prot, unsigned long attrs)
@@ -1015,6 +1182,31 @@ out_free_iova:
 	iommu_dma_free_iova(domain, iova, size, NULL);
 out_free_pages:
 	__iommu_dma_free_pages(pages, count);
+	return NULL;
+}
+
+static void *iommu_dma_restore_realloc_remap(struct device *dev, struct page **pages,
+					     size_t size, dma_addr_t dma_handle,
+					     gfp_t gfp, pgprot_t prot, unsigned long attrs)
+{
+	struct sg_table sgt;
+	void *vaddr;
+	int ret;
+
+	ret = __iommu_dma_map_noncontiguous(dev, pages, dma_handle,
+					    size, &sgt, gfp, prot, attrs);
+	if (ret)
+		return NULL;
+
+	sg_free_table(&sgt);
+	vaddr = dma_common_pages_remap(pages, size, prot,
+			__builtin_return_address(0));
+	if (!vaddr)
+		goto out_unmap;
+	return vaddr;
+
+out_unmap:
+	__iommu_dma_unmap(dev, dma_handle, size);
 	return NULL;
 }
 
