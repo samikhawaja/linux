@@ -345,7 +345,7 @@ static void vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
 
 void vfio_pci_device_attach_iommu(struct vfio_pci_device *device, struct iommu *iommu)
 {
-	u32 pt_id = iommu->ioas_id;
+	const u32 pt_id = iommu->hwpt_id ?: iommu->ioas_id;
 
 	/* Only iommufd supports changing struct iommu attachments */
 	VFIO_ASSERT_TRUE(iommu->iommufd);
