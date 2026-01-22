@@ -108,6 +108,7 @@ void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 	BUG_ON(!kho_restore_folio(iommu_ser->intel.root_table));
 	iommu->root_entry = __va(iommu_ser->intel.root_table);
 
+	printk("%s %d\n", __func__, __LINE__);
 	restore_iommu_context(iommu);
 	iommu_for_each_preserved_device(__restore_used_domain_ids, iommu);
 	pr_info("Restored IOMMU[0x%llx] Root Table at: 0x%llx\n",
@@ -227,6 +228,7 @@ int intel_iommu_preserve(struct iommu_device *iommu_dev, struct iommu_ser *ser)
 	ser->type = IOMMU_INTEL;
 	ser->token = ser->intel.phys_addr;
 	spin_unlock(&iommu->lock);
+	printk("%s %d %llx\n", __func__, __LINE__, ser->token);
 
 	return 0;
 err:

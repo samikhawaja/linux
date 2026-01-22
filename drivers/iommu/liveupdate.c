@@ -165,12 +165,15 @@ static struct liveupdate_flb iommu_flb = {
 
 int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler)
 {
+	printk("%s %d\n", __func__, __LINE__);
+
 	return liveupdate_register_flb(handler, &iommu_flb);
 }
 EXPORT_SYMBOL(iommu_liveupdate_register_flb);
 
 int iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler)
 {
+	printk("%s %d\n", __func__, __LINE__);
 	return liveupdate_unregister_flb(handler, &iommu_flb);
 }
 EXPORT_SYMBOL(iommu_liveupdate_unregister_flb);
@@ -249,10 +252,12 @@ struct iommu_ser *iommu_get_preserved_data(u64 token, enum iommu_lu_type type)
 	struct iommus_ser *iommus;
 	int ret, i, idx;
 
+	printk("%s %d\n", __func__, __LINE__);
 	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&obj);
 	if (ret)
 		return NULL;
 
+	printk("%s %d\n", __func__, __LINE__);
 	iommus = __va(obj->ser->iommus_phys);
 	for (i = 0, idx = 0; i < obj->ser->nr_iommus; ++i, ++idx) {
 		if (idx >= MAX_IOMMU_SERS) {
@@ -260,6 +265,7 @@ struct iommu_ser *iommu_get_preserved_data(u64 token, enum iommu_lu_type type)
 			idx = 0;
 		}
 
+		printk("%s %d %llx %llx\n", __func__, __LINE__, iommus->iommus[idx].token, token);
 		if (iommus->iommus[idx].obj.deleted)
 			continue;
 
@@ -425,15 +431,18 @@ int iommu_preserve_device(struct iommu_domain *domain, struct device *dev)
 	if (!iommu->iommu_dev->ops->preserve)
 		return -EOPNOTSUPP;
 
+	printk("%s %d\n", __func__, __LINE__);
 	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
 	if (ret)
 		return ret;
 
+	printk("%s %d\n", __func__, __LINE__);
 	guard(mutex)(&flb_obj->lock);
 	idx = reserve_obj_ser((struct iommu_objs_ser **)&flb_obj->devices, MAX_IOMMU_SERS);
 	if (idx < 0)
 		return idx;
 
+	printk("%s %d %d\n", __func__, __LINE__, idx);
 	device_ser = &flb_obj->devices->devices[idx];
 	idx = flb_obj->ser->nr_devices++;
 	device_ser->obj.idx = idx;
