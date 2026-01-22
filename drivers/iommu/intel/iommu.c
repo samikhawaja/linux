@@ -677,7 +677,9 @@ static int iommu_alloc_root_entry(struct intel_iommu *iommu, struct iommu_ser *r
 	struct root_entry *root;
 
 #if CONFIG_LIVEUPDATE
+	printk("%s %d\n", __func__, __LINE__);
 	if (restored_state) {
+		printk("%s %d\n", __func__, __LINE__);
 		intel_iommu_liveupdate_restore_root_table(iommu, restored_state);
 		/* Should not be needed since the entries are already cleaned in last kernel. */
 		__iommu_flush_cache(iommu, iommu->root_entry, ROOT_SIZE);
@@ -2944,6 +2946,7 @@ static void __clean_unpreserved_context_entries(struct intel_iommu *iommu)
 	struct device_domain_info *info;
 	struct pci_dev *pdev = NULL;
 
+	printk("%s %d\n", __func__, __LINE__);
 	for_each_pci_dev(pdev) {
 		info = dev_iommu_priv_get(&pdev->dev);
 		if (!info)

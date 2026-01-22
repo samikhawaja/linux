@@ -23,6 +23,38 @@
 	ksft_exit_fail_msg("Failed: %s at %s %d: %s\n", \
 	#condition, __FILE__, __LINE__, strerror(errno)); } while (0)
 
+void daemonize_and_wait(void)
+{
+	pid_t pid;
+
+	ksft_print_msg("[STAGE 1] Forking persistent child to hold sessions...\n");
+
+	pid = fork();
+	if (pid < 0)
+		ksft_exit_fail_msg("fork failed");
+
+	if (pid > 0) {
+		ksft_print_msg("[STAGE 1] Child PID: %d. Resources are pinned.\n", pid);
+		ksft_print_msg("[STAGE 1] You may now perform kexec reboot.\n");
+		exit(EXIT_SUCCESS);
+	}
+
+	/* Detach from terminal so closing the window doesn't kill us */
+	if (setsid() < 0)
+		ksft_exit_fail_msg("setsid failed");
+
+	close(STDIN_FILENO);
+	close(STDOUT_FILENO);
+	close(STDERR_FILENO);
+
+	/* Change dir to root to avoid locking filesystems */
+	if (chdir("/") < 0)
+		exit(EXIT_FAILURE);
+
+	while (1)
+		sleep(60);
+}
+
 int setup_cdev(const char *vfio_cdev_path)
 {
 	int cdev_fd;
@@ -280,8 +312,7 @@ int main(int argc, char *argv[])
 		ret = liveupdate_preserve_fd(session, cdev_fd, cdev_token);
 		ksft_assert(!ret);
 
-		while (1)
-			sleep(5);
+		daemonize_and_wait();
 	} else {
 		ret = luo_session_finish(session);
 		ksft_assert(!ret);
