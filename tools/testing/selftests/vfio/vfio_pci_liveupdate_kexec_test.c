@@ -11,6 +11,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
+#include <linux/iommufd.h>
 #include <linux/sizes.h>
 #include <linux/vfio.h>
 
@@ -22,6 +23,9 @@
 #define NR_MEMFD_FOLIOS		3
 #define MEMFD_SIZE		(NR_MEMFD_FOLIOS * SZ_2M)
 
+/* IOVA of the memfd mappings of a device behind an IOMMU. */
+#define MEMFD_IOVA		SZ_4G
+
 #define MEMCPY_TIMEOUT_S	(30 * 60)
 
 static struct dma_region src_region;
@@ -30,6 +34,13 @@ static void *memfd_vaddr;
 static u64 folio_pa[NR_MEMFD_FOLIOS];
 
 static const char *device_bdf;
+
+/*
+ * The device is either in noiommu mode, or behind an IOMMU and preserved
+ * together with its iommufd state. It depends on how the device is bound to
+ * vfio-pci, see check_device().
+ */
+static bool noiommu;
 
 static char state_session[LIVEUPDATE_SESSION_NAME_LENGTH];
 static char data_session[LIVEUPDATE_SESSION_NAME_LENGTH];
@@ -40,6 +51,8 @@ enum {
 	DEVICE_TOKEN,
 	MEMFD_TOKEN,
 	DATA_TOKEN,
+	IOMMUFD_TOKEN,
+	HWPT_TOKEN,
 };
 
 static u64 memcpy_size(struct vfio_pci_device *device)
@@ -115,14 +128,28 @@ static void dma_memcpy_wait(struct vfio_pci_device *device)
 		       ms);
 }
 
-static void check_noiommu(const char *bdf)
+/*
+ * A device bound to vfio-pci in noiommu mode has a noiommu-vfioX cdev, and a
+ * device behind an IOMMU has a vfioX cdev. Use that to pick the test mode.
+ */
+static void detect_device_mode(void)
 {
-	const char *cdev_path = __vfio_pci_get_cdev_path(bdf, true);
+	const char *cdev_path = __vfio_pci_get_cdev_path(device_bdf, true);
+
+	noiommu = !!cdev_path;
+	free((void *)cdev_path);
+}
+
+static void check_device(const char *bdf)
+{
+	const char *cdev_path;
 	int fd;
 
+	detect_device_mode();
+
+	cdev_path = __vfio_pci_get_cdev_path(bdf, noiommu);
 	if (!cdev_path)
-		ksft_exit_skip("Device %s is not bound to vfio-pci in noiommu mode\n",
-			       bdf);
+		ksft_exit_skip("Device %s is not bound to vfio-pci\n", bdf);
 
 	fd = open(cdev_path, O_RDWR);
 	if (fd < 0)
@@ -131,6 +158,9 @@ static void check_noiommu(const char *bdf)
 
 	close(fd);
 	free((void *)cdev_path);
+
+	ksft_print_msg("Testing device %s in %s mode\n", bdf,
+		       noiommu ? "noiommu" : "iommufd");
 }
 
 static void dma_memfd_regions_map(struct vfio_pci_device *device, int fd,
@@ -150,6 +180,20 @@ static void dma_memfd_regions_map(struct vfio_pci_device *device, int fd,
 
 		r->vaddr = memfd_vaddr + (u64)i * SZ_2M;
 		r->size = SZ_2M;
+
+		/*
+		 * Behind an IOMMU, map the memfd at the same IOVAs before and
+		 * after kexec, as the restored IOMMU domain keeps translating
+		 * them until it is replaced.
+		 */
+		if (!noiommu) {
+			r->file.fd = fd;
+			r->file.offset = (u64)i * SZ_2M;
+			r->iova = MEMFD_IOVA + (u64)i * SZ_2M;
+			iommu_map(device->iommu, r);
+			continue;
+		}
+
 		iommu_map_identity(device->iommu, r);
 
 		if (before_kexec)
@@ -232,6 +276,31 @@ static void load_data_session(int luo_fd)
 	VFIO_ASSERT_EQ(close(data_fd), 0);
 }
 
+/*
+ * Attach the device to a new HWPT on its IOAS and mark that HWPT for
+ * preservation, so that the device keeps using it across kexec.
+ */
+static void hwpt_setup_preserved(struct vfio_pci_device *device)
+{
+	struct iommu *iommu = device->iommu;
+	struct iommu_hwpt_alloc alloc = {
+		.size = sizeof(alloc),
+		.pt_id = iommu->ioas_id,
+		.dev_id = device->dev_id,
+	};
+	struct iommu_hwpt_liveupdate_mark_preserve mark = {
+		.size = sizeof(mark),
+		.hwpt_token = HWPT_TOKEN,
+	};
+
+	ioctl_assert(iommu->iommufd, IOMMU_HWPT_ALLOC, &alloc);
+	iommu->hwpt_id = alloc.out_hwpt_id;
+	vfio_pci_device_attach_iommu(device, iommu);
+
+	mark.hwpt_id = iommu->hwpt_id;
+	ioctl_assert(iommu->iommufd, IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE, &mark);
+}
+
 static void before_kexec(int luo_fd)
 {
 	struct vfio_pci_device *device;
@@ -241,7 +310,7 @@ static void before_kexec(int luo_fd)
 	int memfd;
 	int ret;
 
-	check_noiommu(device_bdf);
+	check_device(device_bdf);
 
 	memfd = vfio_thp_memfd_alloc(MEMFD_SIZE, &init_vaddr);
 	if (memfd < 0)
@@ -249,12 +318,15 @@ static void before_kexec(int luo_fd)
 			       strerror(-memfd));
 	VFIO_ASSERT_EQ(munmap(init_vaddr, MEMFD_SIZE), 0);
 
-	iommu = iommu_init(MODE_IOMMUFD_NOIOMMU);
+	iommu = iommu_init(noiommu ? MODE_IOMMUFD_NOIOMMU : MODE_IOMMUFD);
 	device = vfio_pci_device_init(device_bdf, iommu);
 
 	if (!device->driver.ops || !device->driver.ops->attach)
 		ksft_exit_skip("No driver that supports attach() found for %s\n",
 			       device_bdf);
+
+	if (!noiommu)
+		hwpt_setup_preserved(device);
 
 	dma_memfd_regions_map(device, memfd, true);
 
@@ -271,7 +343,14 @@ static void before_kexec(int luo_fd)
 	ret = luo_session_preserve_fd(session_fd, memfd, MEMFD_TOKEN);
 	VFIO_ASSERT_EQ(ret, 0);
 
-	dma_memfd_recheck_pa(device);
+	if (noiommu) {
+		dma_memfd_recheck_pa(device);
+	} else {
+		/* The iommufd must be preserved before the device. */
+		ret = luo_session_preserve_fd(session_fd, iommu->iommufd,
+					      IOMMUFD_TOKEN);
+		VFIO_ASSERT_EQ(ret, 0);
+	}
 
 	ret = luo_session_preserve_fd(session_fd, device->fd, DEVICE_TOKEN);
 	VFIO_ASSERT_EQ(ret, 0);
@@ -287,7 +366,9 @@ static void before_kexec(int luo_fd)
 	 */
 	vfio_pci_msix_disable(device);
 
-	save_data_session(luo_fd);
+	/* Only noiommu mode checks the physical addresses after kexec. */
+	if (noiommu)
+		save_data_session(luo_fd);
 
 	close(luo_fd);
 	daemonize_and_wait();
@@ -295,7 +376,7 @@ static void before_kexec(int luo_fd)
 
 static void check_open_vfio_device_fails(void)
 {
-	const char *cdev_path = __vfio_pci_get_cdev_path(device_bdf, true);
+	const char *cdev_path = __vfio_pci_get_cdev_path(device_bdf, noiommu);
 	char group_path[PATH_MAX];
 	int group_fd;
 	int group;
@@ -311,8 +392,8 @@ static void check_open_vfio_device_fails(void)
 	if (__sysfs_iommu_group_get(device_bdf, &group))
 		return;
 
-	snprintf_assert(group_path, sizeof(group_path), "/dev/vfio/noiommu-%d",
-			group);
+	snprintf_assert(group_path, sizeof(group_path), "/dev/vfio/%s%d",
+			noiommu ? "noiommu-" : "", group);
 	group_fd = open(group_path, O_RDWR);
 	if (group_fd < 0) {
 		VFIO_ASSERT_EQ(errno, ENOENT);
@@ -324,6 +405,37 @@ static void check_open_vfio_device_fails(void)
 	VFIO_ASSERT_EQ(errno, EBUSY);
 
 	VFIO_ASSERT_EQ(close(group_fd), 0);
+}
+
+/*
+ * Bind the restored device to its restored iommufd and restore the preserved
+ * HWPT. Return a new IOAS and HWPT that replace the restored HWPT later. The
+ * device keeps using the restored IOMMU domain until then.
+ */
+static struct iommu *iommufd_restore(int session_fd, int device_fd)
+{
+	struct iommu_hwpt_liveupdate_restore restore = {
+		.size = sizeof(restore),
+		.hwpt_token = HWPT_TOKEN,
+	};
+	struct iommu *iommu;
+	int iommufd;
+	int dev_id;
+
+	/* The device can't finish before its restored domain is replaced. */
+	VFIO_ASSERT_NE(luo_session_finish(session_fd), 0);
+
+	/* The device was retrieved together with its iommufd. */
+	iommufd = luo_session_retrieve_fd(session_fd, IOMMUFD_TOKEN);
+	VFIO_ASSERT_GE(iommufd, 0);
+
+	dev_id = vfio_device_bind_iommufd(device_fd, iommufd, NULL);
+	ioctl_assert(iommufd, IOMMU_HWPT_LIVEUPDATE_RESTORE, &restore);
+
+	iommu = iommufd_iommu_init(iommufd, dev_id);
+	VFIO_ASSERT_EQ(close(iommufd), 0);
+
+	return iommu;
 }
 
 static void after_kexec(int luo_fd, int state_session_fd)
@@ -338,7 +450,10 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	restore_and_read_stage(state_session_fd, STATE_TOKEN, &stage);
 	VFIO_ASSERT_EQ(stage, 2);
 
-	load_data_session(luo_fd);
+	detect_device_mode();
+
+	if (noiommu)
+		load_data_session(luo_fd);
 
 	check_open_vfio_device_fails();
 
@@ -348,8 +463,14 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	device_fd = luo_session_retrieve_fd(session_fd, DEVICE_TOKEN);
 	VFIO_ASSERT_GE(device_fd, 0);
 
-	iommu = iommu_init(MODE_IOMMUFD_NOIOMMU);
-	device = __vfio_pci_device_init(device_bdf, iommu, device_fd);
+	if (noiommu) {
+		iommu = iommu_init(MODE_IOMMUFD_NOIOMMU);
+		device = __vfio_pci_device_init(device_bdf, iommu, device_fd);
+	} else {
+		iommu = iommufd_restore(session_fd, device_fd);
+		device = __vfio_pci_device_noattach_init(device_bdf, device_fd,
+							 iommu);
+	}
 
 	memfd = luo_session_retrieve_fd(session_fd, MEMFD_TOKEN);
 	VFIO_ASSERT_GE(memfd, 0);
@@ -361,6 +482,12 @@ static void after_kexec(int luo_fd, int state_session_fd)
 
 	/* The device was not reset, so it can be used without reinitializing it. */
 	dma_memcpy_one(device, 'y');
+
+	if (!noiommu) {
+		/* Replace the restored HWPT with the new one, and use it. */
+		vfio_pci_device_attach_iommu(device, iommu);
+		dma_memcpy_one(device, 'z');
+	}
 
 	VFIO_ASSERT_EQ(luo_session_finish(session_fd), 0);
 	VFIO_ASSERT_EQ(close(session_fd), 0);
