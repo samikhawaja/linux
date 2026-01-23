@@ -20,6 +20,8 @@ enum {
 	STATE_TOKEN,
 	DEVICE_TOKEN,
 	MEMFD_TOKEN,
+	IOMMUFD_TOKEN,
+	HWPT_TOKEN,
 };
 
 static void dma_memcpy_one(struct vfio_pci_device *device)
@@ -74,11 +76,15 @@ static void dma_memfd_map(struct vfio_pci_device *device, int fd)
 	vaddr = mmap(NULL, MEMFD_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 	VFIO_ASSERT_NE(vaddr, MAP_FAILED);
 
+	memcpy_region.file.fd = fd;
+	memcpy_region.file.offset = 0;
 	memcpy_region.iova = SZ_4G;
 	memcpy_region.size = MEMCPY_SIZE;
 	memcpy_region.vaddr = vaddr;
 	iommu_map(device->iommu, &memcpy_region);
 
+	device->driver.region.file.fd = fd;
+	device->driver.region.file.offset = memcpy_region.size;
 	device->driver.region.iova = memcpy_region.iova + memcpy_region.size;
 	device->driver.region.size = DRIVER_SIZE;
 	device->driver.region.vaddr = vaddr + memcpy_region.size;
@@ -105,6 +111,7 @@ static void dma_memfd_setup(struct vfio_pci_device *device, int session_fd)
 static void before_kexec(int luo_fd)
 {
 	struct vfio_pci_device *device;
+	struct iommu *iommu_hwpt;
 	struct iommu *iommu;
 	int session_fd;
 	int ret;
@@ -114,14 +121,35 @@ static void before_kexec(int luo_fd)
 
 	create_state_file(luo_fd, state_session, STATE_TOKEN, /*next_stage=*/2);
 
+	/* Use a dedicated HWPT instead of auto domain. */
+	iommu_hwpt = iommufd_iommu_init(iommu->iommufd, device->dev_id);
+	vfio_pci_device_attach_iommu(device, iommu_hwpt);
+	iommu_cleanup(iommu);
+	iommu = iommu_hwpt;
+
 	session_fd = luo_create_session(luo_fd, device_session);
 	VFIO_ASSERT_GE(session_fd, 0);
+
+	dma_memfd_setup(device, session_fd);
+
+	struct iommu_hwpt_lu_set_preserve set_preserve = {
+		.size = sizeof(set_preserve),
+		.hwpt_token = HWPT_TOKEN,
+		.preserve = 1,
+	};
+
+	/* Mark the HWPT for preserved. */
+	set_preserve.hwpt_id = iommu_hwpt->hwpt_id;
+	ret = ioctl(iommu->iommufd, IOMMU_HWPT_LU_SET_PRESERVE, &set_preserve);
+	VFIO_ASSERT_EQ(ret, 0);
+
+	printf("Preserving iommufd in session\n");
+	ret = luo_session_preserve_fd(session_fd, iommu->iommufd, IOMMUFD_TOKEN);
+	VFIO_ASSERT_EQ(ret, 0);
 
 	printf("Preserving device in session\n");
 	ret = luo_session_preserve_fd(session_fd, device->fd, DEVICE_TOKEN);
 	VFIO_ASSERT_EQ(ret, 0);
-
-	dma_memfd_setup(device, session_fd);
 
 	/*
 	 * If the device has a selftests driver, kick off a long-running DMA
@@ -149,47 +177,32 @@ static void before_kexec(int luo_fd)
 static void check_open_vfio_device_fails(void)
 {
 	const char *cdev_path = vfio_pci_get_cdev_path(device_bdf);
-	struct vfio_pci_device *device;
-	struct iommu *iommu;
-	int ret, i;
+	int ret;
 
 	printf("Checking open(%s) fails\n", cdev_path);
 	ret = open(cdev_path, O_RDWR);
 	VFIO_ASSERT_EQ(ret, -1);
 	VFIO_ASSERT_EQ(errno, EBUSY);
 	free((void *)cdev_path);
-
-	for (i = 0; i < nr_iommu_modes; i++) {
-		if (!iommu_modes[i].container_path)
-			continue;
-
-		iommu = iommu_init(iommu_modes[i].name);
-
-		device = vfio_pci_device_alloc(device_bdf, iommu);
-		vfio_pci_group_setup(device, device_bdf);
-		vfio_container_set_iommu(device);
-
-		printf("Checking ioctl(group_fd, VFIO_GROUP_GET_DEVICE_FD, \"%s\") fails (%s)\n",
-		       device_bdf, iommu_modes[i].name);
-
-		ret = ioctl(device->group_fd, VFIO_GROUP_GET_DEVICE_FD, device->bdf);
-		VFIO_ASSERT_EQ(ret, -1);
-		VFIO_ASSERT_EQ(errno, EBUSY);
-
-		close(device->group_fd);
-		free(device);
-		iommu_cleanup(iommu);
-	}
 }
 
 static void after_kexec(int luo_fd, int state_session_fd)
 {
+	struct iommu_hwpt_lu_restore restore = {
+		.size = sizeof(restore),
+		.hwpt_token = HWPT_TOKEN,
+		.hwpt_alloc_flags = 0,
+	};
+
 	struct vfio_pci_device *device;
 	struct iommu *iommu;
 	int session_fd;
 	int device_fd;
 	int memfd;
+	int iommufd;
+	int dev_id;
 	int stage;
+	int ret;
 
 	check_open_vfio_device_fails();
 
@@ -213,31 +226,63 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	printf("Finishing the session before binding to iommufd (should fail)\n");
 	VFIO_ASSERT_NE(luo_session_finish(session_fd), 0);
 
+	iommufd = luo_session_retrieve_fd(session_fd, IOMMUFD_TOKEN);
+	VFIO_ASSERT_GE(iommufd, 0);
+
 	printf("Binding the device to an iommufd and setting it up\n");
-	iommu = iommu_init("iommufd");
+	dev_id = vfio_device_bind_iommufd(device_fd, iommufd);
+
+	/*
+	 * Create a new HWPT that is compatible with the device. This will be
+	 * used before finish to replace the preserved HWPT.
+	 */
+	iommu = iommufd_iommu_init(iommufd, dev_id);
 
 	/*
 	 * This will invoke various ioctls on device_fd such as
 	 * VFIO_DEVICE_GET_INFO. So this is a decent sanity test
 	 * that LUO actually handed us back a valid VFIO device
 	 * file and not something else.
+	 *
+	 * Note the new iommu is used with this device, but it is not attached.
+	 * The underlying restored iommu domain will be used by device. Since
+	 * same IOVA and mappings are used, the userspace should work without
+	 * any problem.
 	 */
-	device = __vfio_pci_device_init(device_bdf, iommu, device_fd);
+	device = __vfio_pci_device_noattach_init(device_bdf, device_fd, iommu);
 
 	dma_memfd_map(device, memfd);
 
-	printf("Finishing the session\n");
-	VFIO_ASSERT_EQ(luo_session_finish(session_fd), 0);
+	ret = ioctl(iommufd, IOMMU_HWPT_LU_RESTORE, &restore);
+	VFIO_ASSERT_TRUE(!ret);
 
 	/*
 	 * Once iommufd preservation is supported and the device is kept fully
 	 * running across the Live Update, this should wait for the long-
 	 * running DMA memcpy operation kicked off in before_kexec() to
 	 * complete. But for now we expect the device to be reset so just
-	 * trigger a single memcpy to make sure it's still functional.
+	 * trigger a single memcpy to make sure it's still functional. Note that
+	 * the DMA is triggered before finishing the session, so this should use
+	 * the restored IOMMU domain. Passing memcpy here should verify that the
+	 * DMA mappings were preserved and the restored iommu domain is still
+	 * active.
 	 */
 	if (device->driver.ops) {
 		vfio_pci_driver_init(device);
+		dma_memcpy_one(device);
+	}
+
+	/* Replace the preserved HWPT with the new HWPT. */
+	vfio_pci_device_attach_iommu(device, iommu);
+
+	printf("Finishing the session\n");
+	VFIO_ASSERT_EQ(luo_session_finish(session_fd), 0);
+
+	/*
+	 * Do another DMA memcpy here to verify that the domain replace was
+	 * successful.
+	 */
+	if (device->driver.ops) {
 		dma_memcpy_one(device);
 	}
 
