@@ -44,6 +44,10 @@ void vfio_pci_device_free(struct vfio_pci_device *device);
 struct vfio_pci_device *__vfio_pci_device_init(const char *bdf,
 					       struct iommu *iommu,
 					       int device_fd);
+int vfio_device_bind_iommufd(int device_fd, int iommufd, const char *vf_token);
+struct vfio_pci_device *__vfio_pci_device_noattach_init(const char *bdf,
+							int device_fd,
+							struct iommu *iommu);
 struct vfio_pci_device *vfio_pci_device_init(const char *bdf, struct iommu *iommu);
 void vfio_pci_device_cleanup(struct vfio_pci_device *device);
 

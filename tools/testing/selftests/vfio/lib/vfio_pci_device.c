@@ -460,6 +460,19 @@ void vfio_pci_device_free(struct vfio_pci_device *device)
 	free(device);
 }
 
+struct vfio_pci_device *__vfio_pci_device_noattach_init(const char *bdf,
+							int device_fd,
+							struct iommu *iommu)
+{
+	struct vfio_pci_device *device;
+
+	device = vfio_pci_device_alloc(bdf, iommu);
+	device->fd = device_fd;
+	vfio_pci_device_setup(device);
+	vfio_pci_driver_probe(device);
+
+	return device;
+}
 struct vfio_pci_device *__vfio_pci_device_init(const char *bdf,
 					       struct iommu *iommu,
 					       int device_fd)
