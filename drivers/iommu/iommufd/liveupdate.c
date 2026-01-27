@@ -13,6 +13,7 @@
 #include <linux/pci.h>
 
 #include "iommufd_private.h"
+#include "io_pagetable.h"
 
 int iommufd_hwpt_lu_set_preserved(struct iommufd_ucmd *ucmd)
 {
@@ -78,8 +79,33 @@ static void iommufd_set_ioas_mutable(struct iommufd_ctx *ictx)
 	xa_unlock(&ictx->objects);
 }
 
+static int check_iopt_pages_preserved(struct liveupdate_session *s,
+				      struct iommufd_hwpt_paging *hwpt)
+{
+	struct iopt_area *area;
+	u64 token;
+	int ret;
+
+	for (area = iopt_area_iter_first(&hwpt->ioas->iopt, 0, ULONG_MAX); area;
+	     area = iopt_area_iter_next(area, 0, ULONG_MAX)) {
+		struct iopt_pages *pages = area->pages;
+
+		/* Only allow file based mapping */
+		if (pages->type != IOPT_ADDRESS_FILE)
+			return -EINVAL;
+
+		/* Make sure that the file was preserved. */
+		ret = liveupdate_get_token_outgoing(s, pages->file, &token);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
-			      struct iommufd_lu *iommufd_lu)
+			      struct iommufd_lu *iommufd_lu,
+			      struct liveupdate_session *session)
 {
 	struct iommufd_hwpt_paging *hwpt, **hwpts = NULL;
 	struct iommu_domain_ser *domain_ser;
@@ -126,7 +152,13 @@ static int iommufd_save_hwpts(struct iommufd_ctx *ictx,
 			goto out;
 		}
 
-		if (iommufd_lu) {
+		if (!iommufd_lu) {
+			rc = check_iopt_pages_preserved(session, hwpt);
+			if (rc) {
+				xa_unlock(&ictx->objects);
+				goto out;
+			}
+		} else if (iommufd_lu) {
 			hwpts[nr_hwpts] = hwpt;
 			hwpt_lu = &iommufd_lu->hwpts[nr_hwpts];
 
@@ -178,7 +210,7 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	if (IS_ERR(ictx))
 		return PTR_ERR(ictx);
 
-	rc = iommufd_save_hwpts(ictx, NULL);
+	rc = iommufd_save_hwpts(ictx, NULL, args->session);
 	if (rc < 0)
 		goto err_ioas_mutable;
 
@@ -192,7 +224,7 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 
 	iommufd_lu = mem;
 	iommufd_lu->nr_hwpts = rc;
-	rc = iommufd_save_hwpts(ictx, iommufd_lu);
+	rc = iommufd_save_hwpts(ictx, iommufd_lu, args->session);
 	if (rc < 0)
 		goto err_free;
 
