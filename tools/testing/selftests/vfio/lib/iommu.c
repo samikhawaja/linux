@@ -115,6 +115,27 @@ static int vfio_iommu_map(struct iommu *iommu, struct dma_region *region)
 	return 0;
 }
 
+static int iommufd_map_file(struct iommu *iommu, struct dma_region *region)
+{
+	struct iommu_ioas_map_file args = {
+		.size = sizeof(args),
+		.flags = IOMMU_IOAS_MAP_READABLE |
+			 IOMMU_IOAS_MAP_WRITEABLE |
+			 IOMMU_IOAS_MAP_FIXED_IOVA,
+		.fd = region->file.fd,
+		.start = region->file.offset,
+		.iova = region->iova,
+		.length = region->size,
+		.ioas_id = iommu->ioas_id,
+	};
+
+	if (ioctl(iommu->iommufd, IOMMU_IOAS_MAP_FILE, &args))
+		return -errno;
+
+	return 0;
+
+}
+
 static int iommufd_map(struct iommu *iommu, struct dma_region *region)
 {
 	struct iommu_ioas_map args = {
@@ -127,6 +148,10 @@ static int iommufd_map(struct iommu *iommu, struct dma_region *region)
 		.length = region->size,
 		.ioas_id = iommu->ioas_id,
 	};
+
+	/* If fd is greater than zero, try doing file mapping. */
+	if (region->file.fd > 0)
+		return iommufd_map_file(iommu, region);
 
 	if (ioctl(iommu->iommufd, IOMMU_IOAS_MAP, &args))
 		return -errno;
