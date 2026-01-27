@@ -302,7 +302,7 @@ const char *vfio_pci_get_cdev_path(const char *bdf)
 	return cdev_path;
 }
 
-static int vfio_device_bind_iommufd(int device_fd, int iommufd)
+int vfio_device_bind_iommufd(int device_fd, int iommufd)
 {
 	struct vfio_device_bind_iommufd args = {
 		.argsz = sizeof(args),
@@ -366,6 +366,20 @@ struct vfio_pci_device *vfio_pci_device_alloc(const char *bdf, struct iommu *iom
 	VFIO_ASSERT_NOT_NULL(iommu);
 	device->iommu = iommu;
 	device->bdf = bdf;
+
+	return device;
+}
+
+struct vfio_pci_device *__vfio_pci_device_noattach_init(const char *bdf,
+							int device_fd,
+							struct iommu *iommu)
+{
+	struct vfio_pci_device *device;
+
+	device = vfio_pci_device_alloc(bdf, iommu);
+	device->fd = device_fd;
+	vfio_pci_device_setup(device);
+	vfio_pci_driver_probe(device);
 
 	return device;
 }
