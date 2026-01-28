@@ -94,6 +94,15 @@ static int check_iopt_pages_preserved(struct liveupdate_session *s,
 		if (pages->type != IOPT_ADDRESS_FILE)
 			return -EINVAL;
 
+		/*
+		 * When this memory file was mapped it should be sealed and seal
+		 * should sealed. This means that since mapping was done the
+		 * memory file was not grown or shrink and the pages being used
+		 * until now remain pinnned and preserved.
+		 */
+		if (!(pages->seals & (F_SEAL_SEAL | F_SEAL_GROW | F_SEAL_SHRINK)))
+			return -EINVAL;
+
 		/* Make sure that the file was preserved. */
 		ret = liveupdate_get_token_outgoing(s, pages->file, &token);
 		if (ret)
