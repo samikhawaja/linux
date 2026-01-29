@@ -386,6 +386,7 @@ struct iommufd_hwpt_paging {
 	bool nest_parent : 1;
 #ifdef CONFIG_LIVEUPDATE
 	bool lu_preserve : 1;
+	bool lu_restored : 1;
 	u32 lu_token;
 #endif
 	/* Head at iommufd_ioas::hwpt_list */
@@ -730,6 +731,7 @@ int iommufd_liveupdate_register_lufs(void);
 int iommufd_liveupdate_unregister_lufs(void);
 
 int iommufd_hwpt_lu_set_preserve(struct iommufd_ucmd *ucmd);
+int iommufd_hwpt_lu_restore(struct iommufd_ucmd *ucmd);
 static inline bool iopt_lu_map_immutable(const struct io_pagetable *iopt)
 {
 	return iopt->lu_map_immutable;
@@ -746,6 +748,11 @@ static inline int iommufd_liveupdate_unregister_lufs(void)
 }
 
 static inline int iommufd_hwpt_lu_set_preserve(struct iommufd_ucmd *ucmd)
+{
+	return -ENOTTY;
+}
+
+static inline int iommufd_hwpt_lu_restore(struct iommufd_ucmd *ucmd)
 {
 	return -ENOTTY;
 }
