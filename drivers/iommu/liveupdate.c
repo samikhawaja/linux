@@ -234,6 +234,41 @@ out:
 }
 EXPORT_SYMBOL(iommu_for_each_preserved_device);
 
+static inline bool match_device_ser(struct iommu_device_ser *match,
+				    struct pci_dev *pdev)
+{
+	return match->devid == pci_dev_id(pdev) && match->pci_domain_nr == pci_domain_nr(pdev->bus);
+}
+
+struct iommu_device_ser *iommu_get_device_preserved_data(struct device *dev)
+{
+	struct iommu_device_ser *device_ser = NULL;
+	struct iommu_device_array_ser *array;
+	struct iommu_flb_obj *flb_obj;
+	int ret, idx;
+
+	if (!dev_is_pci(dev))
+		return NULL;
+
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&flb_obj);
+	if (ret)
+		return NULL;
+
+	array = phys_to_virt(flb_obj->ser->device_array_phys);
+	iommu_liveupdate_for_each_obj(array, device_ser, idx) {
+		if (match_device_ser(device_ser, to_pci_dev(dev))) {
+			device_ser->hdr.incoming = true;
+			goto out;
+		}
+	}
+
+	device_ser = NULL;
+out:
+	liveupdate_flb_put_incoming(&iommu_flb);
+	return device_ser;
+}
+EXPORT_SYMBOL(iommu_get_device_preserved_data);
+
 struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser type)
 {
 	struct iommu_hw_ser *iommu_ser = NULL;
@@ -526,4 +561,47 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 	dev->iommu->device_ser = NULL;
 
 	iommu_unpreserve_locked(iommu->iommu_dev, flb_obj);
+}
+
+struct iommu_domain *iommu_restore_domain(struct device *dev,
+					  struct iommu_device_ser *ser,
+					  void **owner)
+{
+	struct iommu_domain_ser *domain_ser;
+	struct iommu_flb_obj *flb_obj;
+	struct iommu_domain *domain;
+	int ret;
+
+	domain_ser = phys_to_virt(ser->domain_iommu_ser.domain_phys);
+
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&flb_obj);
+	if (ret)
+		return ERR_PTR(ret);
+
+	guard(mutex)(&flb_obj->lock);
+	if (domain_ser->restored_domain) {
+		domain = domain_ser->restored_domain;
+		goto out;
+	}
+
+	domain_ser->hdr.incoming =  true;
+	domain = iommu_paging_domain_alloc(dev);
+	if (IS_ERR(domain))
+		goto out;
+
+	ret = domain->ops->restore(domain, domain_ser);
+	if (ret) {
+		iommu_domain_free(domain);
+		domain = ERR_PTR(ret);
+		goto out;
+	}
+
+	/* The device is owned by the preserved state. */
+	*owner = ser;
+	domain->preserved_state = domain_ser;
+	domain_ser->restored_domain = domain;
+
+out:
+	liveupdate_flb_put_incoming(&iommu_flb);
+	return domain;
 }
