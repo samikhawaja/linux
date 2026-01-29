@@ -18,6 +18,7 @@
 #include <linux/errno.h>
 #include <linux/host1x_context_bus.h>
 #include <linux/iommu.h>
+#include <linux/iommu-liveupdate.h>
 #include <linux/iommufd.h>
 #include <linux/idr.h>
 #include <linux/err.h>
@@ -136,6 +137,7 @@ static void __iommu_group_set_domain_nofail(struct iommu_group *group,
 	WARN_ON(__iommu_group_set_domain_internal(
 		group, new_domain, IOMMU_SET_DOMAIN_MUST_SUCCEED));
 }
+static int __iommu_group_alloc_blocking_domain(struct iommu_group *group);
 
 static int iommu_setup_default_domain(struct iommu_group *group,
 				      int target_type);
@@ -511,6 +513,12 @@ static int iommu_init_device(struct device *dev)
 		ret = -EINVAL;
 		goto err_free;
 	}
+
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	ret = iommu_init_device_preserved_data(dev);
+	if (ret)
+		goto err_module_put;
+#endif
 
 	iommu_dev = ops->probe_device(dev);
 	if (IS_ERR(iommu_dev)) {
@@ -2176,6 +2184,7 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 	ret = domain->ops->attach_dev(domain, dev, old);
 	if (ret)
 		return ret;
+
 	dev->iommu->attach_deferred = 0;
 	trace_attach_device_to_domain(dev);
 	return 0;
@@ -3131,6 +3140,60 @@ int iommu_fwspec_add_ids(struct device *dev, const u32 *ids, int num_ids)
 }
 EXPORT_SYMBOL_GPL(iommu_fwspec_add_ids);
 
+static inline void *__iommu_group_restored_state(struct iommu_group *group)
+{
+	struct device *dev;
+
+	dev = iommu_group_first_dev(group);
+	if (!dev_is_pci(dev))
+		return NULL;
+
+	return dev_iommu_restored_state(dev);
+}
+
+static int __iommu_group_restore_domain(struct iommu_group *group)
+{
+	struct iommu_device_ser *device_ser;
+	struct iommu_domain *domain;
+	struct device *dev;
+	void *owner;
+	int ret;
+
+	lockdep_assert_held(&group->mutex);
+	if (group->domain)
+		return -EBUSY;
+
+	dev = iommu_group_first_dev(group);
+	if (!dev_is_pci(dev))
+		return -EINVAL;
+
+	device_ser = dev_iommu_restored_state(dev);
+	if (!device_ser)
+		return -ENOENT;
+
+	ret = __iommu_group_alloc_blocking_domain(group);
+	if (ret)
+		return ret;
+
+	domain = iommu_restore_domain(dev, device_ser, &owner);
+	if (WARN_ON(IS_ERR(domain)))
+		return PTR_ERR(domain);
+
+	/* The restored domain is attached with the restored device. */
+	ret = __iommu_group_set_domain(group, domain);
+	if (ret)
+		return ret;
+
+	/*
+	 * Ownership of groups with preserved devices is set during boot. These
+	 * will be reclaimed later by the entity (iommufd) that preserved them.
+	 */
+	WARN_ON(group->owner);
+	group->owner = owner;
+	group->owner_cnt = 1;
+	return ret;
+}
+
 /**
  * iommu_setup_default_domain - Set the default_domain for the group
  * @group: Group to change
@@ -3189,6 +3252,16 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 
 	/* We must set default_domain early for __iommu_device_set_domain */
 	group->default_domain = dom;
+
+	/* Preserved devices need to be attached to the restore domain */
+	if (__iommu_group_restored_state(group)) {
+		ret = __iommu_group_restore_domain(group);
+		if (ret)
+			goto err_restore_def_domain;
+
+		goto out_free_old;
+	}
+
 	if (!group->domain) {
 		/*
 		 * Drivers are not allowed to fail the first domain attach.
