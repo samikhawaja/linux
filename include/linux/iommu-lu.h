@@ -66,6 +66,8 @@ static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain 
 	return -1;
 }
 
+struct iommu_domain *iommu_restore_domain(struct device *dev,
+					  struct device_ser *ser);
 int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 				    void *arg);
 struct device_ser *iommu_get_device_preserved_data(struct device *dev);
