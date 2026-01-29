@@ -550,3 +550,40 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 
 	iommu_unpreserve_locked(iommu->iommu_dev, flb_obj);
 }
+
+struct iommu_domain *iommu_restore_domain(struct device *dev,
+					  struct iommu_device_ser *ser,
+					  void **owner)
+{
+	struct iommu_domain_ser *domain_ser;
+	struct iommu_flb_obj *flb_obj;
+	struct iommu_domain *domain;
+	int ret;
+
+	domain_ser = phys_to_virt(ser->domain_iommu_ser.domain_phys);
+
+	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&flb_obj);
+	if (ret)
+		return ERR_PTR(ret);
+
+	guard(mutex)(&flb_obj->lock);
+	if (domain_ser->restored_domain)
+		return domain_ser->restored_domain;
+
+	domain_ser->hdr.incoming =  true;
+	domain = iommu_paging_domain_alloc(dev);
+	if (IS_ERR(domain))
+		return domain;
+
+	ret = domain->ops->restore(domain, domain_ser);
+	if (ret) {
+		iommu_domain_free(domain);
+		return ERR_PTR(ret);
+	}
+
+	/* The device is owned by the preserved state. */
+	*owner = ser;
+	domain->preserved_state = domain_ser;
+	domain_ser->restored_domain = domain;
+	return domain;
+}
