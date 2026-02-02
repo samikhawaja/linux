@@ -95,10 +95,14 @@ static void dma_memfd_setup(struct vfio_pci_device *device, int session_fd)
 {
 	int fd, ret;
 
-	fd = memfd_create("dma-buffer", 0);
+	fd = memfd_create("dma-buffer", MFD_ALLOW_SEALING);
 	VFIO_ASSERT_GE(fd, 0);
 
 	ret = fallocate(fd, 0, 0, MEMFD_SIZE);
+	VFIO_ASSERT_EQ(ret, 0);
+
+	ret = fcntl(fd, F_ADD_SEALS,
+		    F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL);
 	VFIO_ASSERT_EQ(ret, 0);
 
 	printf("Preserving memfd of size 0x%x in session\n", MEMFD_SIZE);
@@ -135,7 +139,6 @@ static void before_kexec(int luo_fd)
 	struct iommu_hwpt_lu_set_preserve set_preserve = {
 		.size = sizeof(set_preserve),
 		.hwpt_token = HWPT_TOKEN,
-		.preserve = 1,
 	};
 
 	/* Mark the HWPT for preserved. */
@@ -188,21 +191,12 @@ static void check_open_vfio_device_fails(void)
 
 static void after_kexec(int luo_fd, int state_session_fd)
 {
-	struct iommu_hwpt_lu_restore restore = {
-		.size = sizeof(restore),
-		.hwpt_token = HWPT_TOKEN,
-		.hwpt_alloc_flags = 0,
-	};
-
 	struct vfio_pci_device *device;
 	struct iommu *iommu;
 	int session_fd;
 	int device_fd;
-	int iommufd;
-	int dev_id;
 	int memfd;
 	int stage;
-	int ret;
 
 	check_open_vfio_device_fails();
 
@@ -226,17 +220,9 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	printf("Finishing the session before binding to iommufd (should fail)\n");
 	VFIO_ASSERT_NE(luo_session_finish(session_fd), 0);
 
-	iommufd = luo_session_retrieve_fd(session_fd, IOMMUFD_TOKEN);
-	VFIO_ASSERT_GE(iommufd, 0);
+	VFIO_ASSERT_EQ(luo_session_retrieve_fd(session_fd, IOMMUFD_TOKEN), -EOPNOTSUPP);
 
-	printf("Binding the device to an iommufd and setting it up\n");
-	dev_id = vfio_device_bind_iommufd(device_fd, iommufd);
-
-	/*
-	 * Create a new HWPT that is compatible with the device. This will be
-	 * used before finish to replace the preserved HWPT.
-	 */
-	iommu = iommufd_iommu_init(iommufd, dev_id);
+	iommu = iommu_init("iommufd");
 
 	/*
 	 * This will invoke various ioctls on device_fd such as
@@ -253,9 +239,6 @@ static void after_kexec(int luo_fd, int state_session_fd)
 
 	dma_memfd_map(device, memfd);
 
-	ret = ioctl(iommufd, IOMMU_HWPT_LU_RESTORE, &restore);
-	VFIO_ASSERT_TRUE(!ret);
-
 	/*
 	 * Once iommufd preservation is supported and the device is kept fully
 	 * running across the Live Update, this should wait for the long-
@@ -269,20 +252,6 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	 */
 	if (device->driver.ops) {
 		vfio_pci_driver_init(device);
-		dma_memcpy_one(device);
-	}
-
-	/* Replace the preserved HWPT with the new HWPT. */
-	vfio_pci_device_attach_iommu(device, iommu);
-
-	printf("Finishing the session\n");
-	VFIO_ASSERT_EQ(luo_session_finish(session_fd), 0);
-
-	/*
-	 * Do another DMA memcpy here to verify that the domain replace was
-	 * successful.
-	 */
-	if (device->driver.ops) {
 		dma_memcpy_one(device);
 	}
 
