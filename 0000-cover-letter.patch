@@ -1,0 +1,310 @@
+From b766b1239d9b689967572e508c1f25faa6078c69 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Mon, 2 Feb 2026 02:30:18 +0000
+Subject: [PATCH 00/14] iommu: Add live update state preservation
+
+Hi,
+
+This patch series introduces a mechanism for IOMMU state preservation
+across live update, including the Intel VT-d driver support
+implementation.
+
+This is a non-RFC version of the previously sent RFC:
+https://lore.kernel.org/all/20251202230303.1017519-1-skhawaja@google.com/
+
+Please take a look at the following LWN article to learn about KHO and
+Live Update Orchestrator:
+
+https://lwn.net/Articles/1033364/
+
+This work is based on,
+
+- linux-next (tag: next-20260115)
+- MEMFD SEAL preservation series:
+  https://lore.kernel.org/all/20260123095854.535058-1-pratyush@kernel.org/
+- VFIO CDEV preservation series (v2):
+  https://lore.kernel.org/all/20260129212510.967611-1-dmatlack@google.com/
+
+The kernel tree with all dependencies is uploaded to the following
+Github location:
+
+https://github.com/samikhawaja/linux/tree/iommu/rfc-v2
+
+Overall Goals:
+
+The goal of this effort is to preserve the IOMMU domains, managed by
+iommufd, attached to preserved VFIO. This allows DMA mappings and IOMMU
+context of a device assigned to a VM to be maintained across a live
+update.
+
+This is achieved by preserving IOMMU page tables using Generic Page
+Table support, IOMMU root table and the relevant context entries across
+live update.
+
+The previous RFC is split into two phases and this one implements the
+phase 1. The Phase 1 implements following functionality,
+
+  - Foundational work in IOMMU core and VT-d driver to preserve and
+    restore IOMMU translation units, IOMMU domains and devices across
+    liveupdate kexec.
+  - The preservation is triggered by preserving vfio cdev FD and bound
+    iommufd FD into a live update session.
+  - During live update boot, the state of preserved Intel VT-d, IOMMU
+    domain and devices is restored.
+  - The restored IOMMU domains are reattached to the preserved devices
+    during early boot.
+  - The DMA ownership of restored devices is also claimed during
+    live update boot. This means that any attempt to bind a non-vfio
+    drivers with them or binding a new iommufd with them will fail.
+
+Architectural Overview:
+
+The target architecture for IOMMU state preservation across a live
+update involves coordination between the Live Update Orchestrator,
+iommufd, and the IOMMU drivers.
+
+The core design uses the Live Update Orchestrator's file descriptor
+preservation mechanism to preserve iommufd file descriptors. The user
+marks the iommufd HWPTs for preservation using a new ioctl added in this
+series. Once done, the preservation of iommufd inside an LUO sessions is
+triggered using LUO ioctls. During preservation, the LUO preserve
+callback for an iommufd walks through the HWPTs it manages to identify
+the ones that need to be preserved. Once identified, a new IOMMU core
+API is used to preserve the iommu domain. The IOMMU core uses Generic
+Page Table to preserve the page tables of these domains. The domains are
+then marked as preserved.
+
+When the user triggers the preservation of a VFIO cdev that is attached
+to an iommufd that is preserved, the device attachment state of that
+VFIO cdev is also preserved using an API exported by iommufd. IOMMUFD
+fetches all the information that needs to be preserved and calls the
+IOMMU core API to preserve the device state. The IOMMU core also
+preserves state of IOMMU that is associated with this device.
+
+The IOMMU core has LUO FLB registered with the iommufd LUO file handler
+so the preserved iommu domain and iommu hardware unit state is available
+during boot for early restore in the next kernel.
+
+During boot the driver fetches the preserved state from the IOMMU core
+and restores the state of preserved IOMMUs. Later when IOMMU core goes
+through the devices and probes them, the iommu domains of preserved
+devices are restored and the preserved devices are attached to them.
+
+Tested:
+
+The new iommufd_liveupdate selftest was used to verify the preservation
+logic. It was tested using QEMU with virtual IOMMU (VT-d) support with
+virtio pcie device bound to the vfio-pci.
+
+Also Tested on an Intel machine with DSA device bound to vfio-pci driver.
+
+Following steps were followed for verification,
+
+- Bind the DSA device with vfio-pci driver
+- Run test on the machine by running
+
+  ./iommufd_liveupdate <vfio-cdev-path>
+
+- Trigger Kexec.
+- After reboot, try binding the device to a non-vfio pci driver,
+
+  echo <device bdf> > /sys/class/bus/drivers/pci-pf-stub/bind
+
+- This should fail with "Device or resource busy".
+- Bind the device with vfio-pci driver and run the test again.
+- Test verifies that the device cannot be bound with a new iommufd and
+  the session cannot be finished.
+
+Future Work:
+
+- Auto bind VFIO cdev during retrieve using preserved iommufd token
+  fetched from LUO using internal API.
+- Implement a versioning scheme for serialized data to ensure
+  compatibility across kernel versions.
+- Extend support to other IOMMU architectures (e.g., AMD-Vi, Arm SMMUv3).
+- Only accept memfds that are SEAL'd for iommufd preservation..
+- Keep preserved memfd immutable after retrieve.
+- Make HWPTs immutable after iommufd is preserved.
+
+High-Level Sequence Flow:
+
+The following diagrams illustrate the high-level interactions during the
+preservation phase.
+
+Prepare:
+
+Before live update the PREPARE event of Liveupdate Orchestrator invokes
+callbacks of the registered file and subsystem handlers.
+
+ Userspace (VMM) | LUO Core |    iommufd    |  IOMMU Core   | IOMMU Driver
+-----------------|----------|---------------|---------------|-------------
+                 |          |               |               |
+MARK_HWPT        |          |               |               |
+--------------------------->                |               |
+                 |          | Mark HWPT as  |               |
+                 |          | lu_preserved  |               |
+                 |          |               |               |
+PRESERVE         |          |               |               |
+ iommufd_fd      |          |               |               |
+----------------->          |               |               |
+                 | preserve |               |               |
+                 |---------->               |               |
+                 |          | For each HWPT |               |
+                 |          |-------------->                |
+                 |          |               | domain_presrv |
+                 |          |               |-------------->
+                 |          |               |               | gpt(preserve)
+                 |          |               |<--------------|
+                 |          |<--------------|               |
+                 |<---------|               |               |
+                 |          |               |               |
+...              |          |               |               |
+                 |          |               |               |
+PRESERVE,        |          |               |               |
+ vfio_cdev_fd    |          |               |               |
+----------------->          |               |               |
+                 | preserve |               |               |
+                 |---------->               |               |
+                 |          |               |               |
+                 |          | Get domain    |               |
+                 |          | iommu_preserv |               |
+                 |          | _device()     |               |
+                 |          |-------------->                |
+                 |          |               | preserve      |
+                 |          |               | (iommu_hw)    |
+                 |          |               |-------------->
+                 |          |               |               | preserve(root)
+                 |          |               |<--------------|
+                 |          |               |               |
+                 |          |               | preserve      |
+                 |          |               | _device(dev)  |
+                 |          |               |-------------->
+                 |          |               |               |
+                 |          |               |<--------------|
+                 |          |<--------------|               |
+                 |<---------|               |               |
+
+Restore:
+
+After a live update, the preserved state is restored during boot.
+
+ Userspace (VMM) | LUO Core |    iommufd    |  IOMMU Core   | IOMMU Driver
+-----------------|----------|---------------|---------------|-------------
+                 |          |               |               |
+                 |          |               |               | Restore
+                 |          |               |               | Root, DIDs
+                 |          |               |               |
+                 |          |               |               | Register
+                 |          |               | probe devices |
+                 |          |               |               |
+                 |          |               | restore       |
+                 |          |               | domain        |
+                 |          |               |-------------->
+                 |          |               |               | restore
+                 |          |               | reattach      |
+                 |          |               | domain        |
+                 |          |               |-------------->
+                 |          |               |               |
+
+
+Looking forward to your feedback on this.
+
+Pasha Tatashin (1):
+  liveupdate: luo_file: Add internal APIs to get preserved file
+
+Samiullah Khawaja (11):
+  iommu: Implement IOMMU LU FLB callbacks
+  iommu: Implement IOMMU core liveupdate skeleton
+  iommu/pages: Add APIs to preserve/unpreserve/restore iommu pages
+  iommupt: Implement preserve/unpreserve/restore callbacks
+  iommu/vt-d: Implement device and iommu preserve/unpreserve ops
+  iommu/vt-d: Restore IOMMU state and reclaimed domain ids
+  iommu: Restore and reattach preserved domains to devices
+  iommu/vt-d: preserve PASID table of preserved device
+  iommufd: Add APIs to preserve/unpreserve a vfio cdev
+  vfio/pci: Preserve the iommufd state of the vfio cdev
+  iommufd/selftest: Add test to verify iommufd preservation
+
+YiFei Zhu (2):
+  iommufd-lu: Implement ioctl to let userspace mark an HWPT to be
+    preserved
+  iommufd-lu: Persist iommu hardware pagetables for live update
+
+ drivers/iommu/Makefile                        |   1 +
+ drivers/iommu/generic_pt/iommu_pt.h           |  96 ++++
+ drivers/iommu/intel/Makefile                  |   1 +
+ drivers/iommu/intel/iommu.c                   | 112 +++-
+ drivers/iommu/intel/iommu.h                   |  15 +-
+ drivers/iommu/intel/liveupdate.c              | 292 ++++++++++
+ drivers/iommu/intel/nested.c                  |   2 +-
+ drivers/iommu/intel/pasid.c                   |   7 +-
+ drivers/iommu/intel/pasid.h                   |   8 +
+ drivers/iommu/iommu-pages.c                   |  70 +++
+ drivers/iommu/iommu-pages.h                   |   8 +
+ drivers/iommu/iommu.c                         |  50 +-
+ drivers/iommu/iommufd/Makefile                |   1 +
+ drivers/iommu/iommufd/device.c                |  74 +++
+ drivers/iommu/iommufd/io_pagetable.c          |  17 +
+ drivers/iommu/iommufd/io_pagetable.h          |   1 +
+ drivers/iommu/iommufd/iommufd_private.h       |  38 ++
+ drivers/iommu/iommufd/liveupdate.c            | 347 ++++++++++++
+ drivers/iommu/iommufd/main.c                  |  16 +-
+ drivers/iommu/iommufd/pages.c                 |   8 +
+ drivers/iommu/liveupdate.c                    | 532 ++++++++++++++++++
+ drivers/vfio/pci/vfio_pci_liveupdate.c        |  26 +-
+ include/linux/generic_pt/iommu.h              |  10 +
+ include/linux/iommu-lu.h                      |  99 ++++
+ include/linux/iommu.h                         |  32 ++
+ include/linux/iommufd.h                       |  10 +
+ include/linux/kho/abi/iommu.h                 | 126 +++++
+ include/linux/kho/abi/iommufd.h               |  39 ++
+ include/linux/kho/abi/vfio_pci.h              |  10 +
+ include/linux/liveupdate.h                    |  27 +
+ include/uapi/linux/iommufd.h                  |  19 +
+ kernel/liveupdate/luo_file.c                  | 174 +++++-
+ kernel/liveupdate/luo_internal.h              |  18 +-
+ kernel/liveupdate/luo_session.c               |  11 +-
+ tools/testing/selftests/iommu/Makefile        |  12 +
+ .../selftests/iommu/iommufd_liveupdate.c      | 209 +++++++
+ 36 files changed, 2458 insertions(+), 60 deletions(-)
+ create mode 100644 drivers/iommu/intel/liveupdate.c
+ create mode 100644 drivers/iommu/iommufd/liveupdate.c
+ create mode 100644 drivers/iommu/liveupdate.c
+ create mode 100644 include/linux/iommu-lu.h
+ create mode 100644 include/linux/kho/abi/iommu.h
+ create mode 100644 include/linux/kho/abi/iommufd.h
+ create mode 100644 tools/testing/selftests/iommu/iommufd_liveupdate.c
+
+
+base-commit: 9b7977f9e39b7768c70c2aa497f04e7569fd3e00
+prerequisite-patch-id: 381061470e9fdc9a380873c416982f20081acb54
+prerequisite-patch-id: 5bd38fa34b3915330cfe7363fff161a59249b6ea
+prerequisite-patch-id: 3ded8736ee45588339b51b2eeaff4310ac0a1773
+prerequisite-patch-id: da3b131e7ef95231eab8a389d68b5e50e9ded03a
+prerequisite-patch-id: 6864abacee78beb8de1e2092b5e7d5fe03da968b
+prerequisite-patch-id: be555a5872c32b00bb8dfa0dfc941fa3b7ab733c
+prerequisite-patch-id: a18d4e8ccdf7ce815055ac9644d5b4a136fa0d75
+prerequisite-patch-id: 258e15c3dce08cffd2523592c81d8190b43dd56a
+prerequisite-patch-id: 99f70d090aee87eda50a16faa93d061c898b5143
+prerequisite-patch-id: 98569e1f1290132b26acb57801a0f8a0742f242c
+prerequisite-patch-id: 9dd3495961cfbb27deb61e3f5e1da189d4944614
+prerequisite-patch-id: 85705fb54d3065efe1d87ab4b69e828a9f3404e7
+prerequisite-patch-id: c2ab2b70c39a32442d647e797c20f27eaab742ef
+prerequisite-patch-id: 0812b67e25552e98e69ee53427b32237951cc33c
+prerequisite-patch-id: 5198cf15a03ddbf1d0d1a2aafb6df213fa7c4337
+prerequisite-patch-id: a034eddd239b116848d3dec8004d3c23c90e7c7b
+prerequisite-patch-id: bafef63b7c40d095884523671c705d2cf9522345
+prerequisite-patch-id: a98e919938e608ac42477a7b01b14dba02d28f12
+prerequisite-patch-id: cbbcc61b70e00f9546f092bbf44b332a29e0490f
+prerequisite-patch-id: 6b1438a4b53c465fa10a74c05e462f6fc7248ec0
+prerequisite-patch-id: 3e7919eca1312a02f150c00fae598c6b2dec6d3e
+prerequisite-patch-id: b3aa2e464ee83d989ba1ca8b4a4941d7522a8aff
+prerequisite-patch-id: 82cbc899332ff90d603d41d1481112a921207457
+prerequisite-patch-id: 3f64b2feb2edac1b3956236a8b7f6b392d97da54
+prerequisite-patch-id: e6f5aa065dec052a742ceff9f81624d40c112e8e
+prerequisite-patch-id: 00b71db9d857e63d601487c02e80b7163bb8cfb0
+prerequisite-patch-id: ca6268171c639292cb63bbccbd34a2c648f3d746
+prerequisite-patch-id: a284fc0ed8749966f5b9071699c7990df43abde6
+-- 
+2.53.0.rc1.225.gd81095ad13-goog
+
