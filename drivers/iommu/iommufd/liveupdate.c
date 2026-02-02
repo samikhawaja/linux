@@ -2,6 +2,7 @@
 
 #define pr_fmt(fmt) "iommufd: " fmt
 
+#include <linux/anon_inodes.h>
 #include <linux/file.h>
 #include <linux/iommufd.h>
 #include <linux/kexec_handover.h>
@@ -287,59 +288,53 @@ static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 
 static int iommufd_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
-	return -EOPNOTSUPP;
-}
-
-int iommufd_hwpt_lu_restore(struct iommufd_ucmd *ucmd)
-{
-	struct iommu_hwpt_lu_restore *cmd = ucmd->cmd;
-	struct iommufd_hwpt_paging *hwpt = NULL;
-	struct iommufd_ctx *ictx = ucmd->ictx;
-	struct iommu_domain_ser *domain_ser;
-	struct iommufd_hwpt_lu *hwpt_lu;
 	struct iommufd_lu *iommufd_lu;
-	struct iommu_domain *domain;
-	unsigned int i;
+	struct iommufd_ctx *ictx;
+	struct folio *folio_lu;
+	struct file *file;
 	int rc;
 
-	iommufd_lu = ictx->lu;
-	if (!iommufd_lu)
-		return -ENOTTY;
+	folio_lu = kho_restore_folio(args->serialized_data);
+	if (IS_ERR_OR_NULL(folio_lu))
+		return -EFAULT;
 
-	for (i = 0; i < iommufd_lu->nr_hwpts; i++) {
-		hwpt_lu = &iommufd_lu->hwpts[i];
+	iommufd_lu = folio_address(folio_lu);
 
-		if (hwpt_lu->reclaimed)
-			continue;
-
-		if (hwpt_lu->token == cmd->hwpt_token)
-			goto hwpt_found;
+	file = anon_inode_create_getfile("iommufd", &iommufd_fops,
+					 NULL, O_RDWR, NULL);
+	if (IS_ERR(file)) {
+		rc = PTR_ERR(file);
+		goto err_folio_put;
 	}
 
-	return -ENOENT;
+	rc = iommufd_fops.open(file->f_inode, file);
+	if (rc)
+		goto err_fput;
 
-hwpt_found:
-	hwpt = _iommufd_hwpt_paging_alloc(ictx);
-	if (IS_ERR(hwpt))
-		return PTR_ERR(hwpt);
-
-	domain_ser = __va(hwpt_lu->domain_data);
-	domain = domain_ser->restored_domain;
-	if (!domain) {
-		rc = -ENOENT;
-		goto err_destroy;
+	ictx = iommufd_ctx_from_file(file);
+	if (WARN_ON(IS_ERR(ictx))) {
+		rc = PTR_ERR(ictx);
+		goto err_fput;
 	}
 
-	iommufd_hwpt_init_from_domain(&hwpt->common, domain);
-	iommufd_object_finalize(ictx, &hwpt->common.obj);
+	if (WARN_ON(ictx->lu)) {
+		rc = -EEXIST;
+		goto err_ctx_put;
+	}
+	ictx->lu = iommufd_lu;
 
-	hwpt_lu->reclaimed = true;
-	hwpt->lu_restored = true;
-	cmd->pt_id = hwpt->common.obj.id;
+	iommufd_ctx_put(ictx);
+
+	args->file = file;
+
 	return 0;
 
-err_destroy:
-	iommufd_object_abort_and_destroy(ictx, &hwpt->common.obj);
+err_ctx_put:
+	iommufd_ctx_put(ictx);
+err_fput:
+	fput(file);
+err_folio_put:
+	folio_put(folio_lu);
 	return rc;
 }
 
@@ -389,6 +384,14 @@ static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 
 static void iommufd_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
+	struct iommufd_lu *iommufd_lu;
+	struct iommufd_ctx *ictx;
+
+	ictx = iommufd_ctx_from_file(args->file);
+	iommufd_lu = ictx->lu;
+	ictx->lu = NULL;
+	folio_put(virt_to_folio(iommufd_lu));
+	iommufd_ctx_put(ictx);
 }
 
 static bool iommufd_liveupdate_can_preserve(struct liveupdate_file_handler *handler,
