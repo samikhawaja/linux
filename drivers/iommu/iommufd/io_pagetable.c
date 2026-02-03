@@ -1410,7 +1410,7 @@ int iopt_cut_iova(struct io_pagetable *iopt, unsigned long *iovas,
 	int i;
 
 	down_write(&iopt->iova_rwsem);
-	if (iopt->lu_map_immutable) {
+	if (iopt_lu_map_immutable(iopt)) {
 		up_write(&iopt->iova_rwsem);
 		return -EBUSY;
 	}

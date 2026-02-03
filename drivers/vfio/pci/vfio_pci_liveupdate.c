@@ -51,6 +51,7 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	if (vfio_pci_is_intel_display(pdev))
 		return -EINVAL;
 
+#if CONFIG_IOMMU_LIVEUPDATE
 	/* If iommufd is attached, preserve the underlying domain */
 	if (device->iommufd_attached) {
 		int err = iommufd_device_preserve(args->session,
@@ -59,6 +60,7 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 		if (err < 0)
 			return err;
 	}
+#endif
 
 	ser = kho_alloc_preserve(sizeof(*ser));
 	if (IS_ERR(ser)) {

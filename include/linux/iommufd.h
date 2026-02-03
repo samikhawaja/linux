@@ -79,6 +79,19 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 void iommufd_device_unpreserve(struct liveupdate_session *s,
 			       struct iommufd_device *idev,
 			       u64 token);
+#else
+static inline int iommufd_device_preserve(struct liveupdate_session *s,
+					  struct iommufd_device *idev,
+					  u64 *tokenp)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline void iommufd_device_unpreserve(struct liveupdate_session *s,
+					     struct iommufd_device *idev,
+					     u64 token)
+{
+}
 #endif
 
 struct iommufd_access_ops {

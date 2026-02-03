@@ -13,10 +13,9 @@
 #include <linux/liveupdate.h>
 #include <linux/kho/abi/iommu.h>
 
-#ifdef CONFIG_IOMMU_LIVEUPDATE
-
 typedef int (*iommu_preserved_device_iter_fn)(struct device_ser *ser,
 					      void *arg);
+#ifdef CONFIG_IOMMU_LIVEUPDATE
 static inline void *dev_iommu_preserved_state(struct device *dev)
 {
 	struct device_ser *ser;
@@ -96,6 +95,17 @@ static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain 
 static inline void *iommu_domain_restored_state(struct iommu_domain *domain)
 {
 	return NULL;
+}
+
+static inline struct iommu_domain *iommu_restore_domain(struct device *dev,
+							struct device_ser *ser)
+{
+	return NULL;
+}
+
+static inline int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn, void *arg)
+{
+	return -EOPNOTSUPP;
 }
 
 static inline struct device_ser *iommu_get_device_preserved_data(struct device *dev)

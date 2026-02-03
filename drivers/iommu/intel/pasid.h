@@ -290,7 +290,8 @@ int intel_pasid_alloc_table(struct device *dev);
 #ifdef CONFIG_IOMMU_LIVEUPDATE
 void *intel_pasid_try_restore_table(struct device *dev, u64 max_pasid);
 #else
-static inline void *intel_pasid_try_restore_table(struct device *dev)
+static inline void *intel_pasid_try_restore_table(struct device *dev,
+						  u64 max_pasid)
 {
 	return NULL;
 }
