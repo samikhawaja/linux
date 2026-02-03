@@ -7,6 +7,7 @@
 #include <linux/iommufd.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/iommufd.h>
+#include <linux/kho/abi/iommu.h>
 #include <linux/liveupdate.h>
 #include <linux/iommu-lu.h>
 #include <linux/mm.h>
@@ -340,12 +341,9 @@ err_folio_put:
 
 static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
-	struct iommufd_hwpt_paging *hwpt;
-	struct iommufd_hwpt_lu *hwpt_lu;
+	struct iommu_domain_ser *domain_ser;
 	struct iommufd_lu *iommufd_lu;
-	struct iommufd_object *obj;
 	struct iommufd_ctx *ictx;
-	unsigned long index;
 	unsigned int i;
 
 	if (!args->retrieved || !args->file) {
@@ -357,38 +355,29 @@ static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 	iommufd_lu = ictx->lu;
 
 	for (i = 0; i < iommufd_lu->nr_hwpts; i++) {
-		hwpt_lu = &iommufd_lu->hwpts[i];
-
-		if (!hwpt_lu->reclaimed)
+		domain_ser = __va(iommufd_lu->hwpts[i].domain_data);
+		if (iommu_domain_has_attachments(domain_ser->restored_domain))
 			return false;
 	}
-
-	xa_lock(&ictx->objects);
-	xa_for_each(&ictx->objects, index, obj) {
-		if (obj->type != IOMMUFD_OBJ_HWPT_PAGING)
-			continue;
-
-		hwpt = container_of(obj, struct iommufd_hwpt_paging, common.obj);
-		if (!hwpt->lu_restored)
-			continue;
-
-		if (!hwpt->common.domain || iommu_domain_has_attachments(hwpt->common.domain)) {
-			xa_unlock(&ictx->objects);
-			return false;
-		}
-	}
-	xa_unlock(&ictx->objects);
 
 	return true;
 }
 
 static void iommufd_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
+	struct iommu_domain_ser *domain_ser;
 	struct iommufd_lu *iommufd_lu;
 	struct iommufd_ctx *ictx;
+	unsigned int i;
 
 	ictx = iommufd_ctx_from_file(args->file);
 	iommufd_lu = ictx->lu;
+
+	for (i = 0; i < iommufd_lu->nr_hwpts; i++) {
+		domain_ser = __va(iommufd_lu->hwpts[i].domain_data);
+		iommu_domain_free(domain_ser->restored_domain);
+	}
+
 	ictx->lu = NULL;
 	folio_put(virt_to_folio(iommufd_lu));
 	iommufd_ctx_put(ictx);

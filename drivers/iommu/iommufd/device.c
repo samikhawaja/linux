@@ -256,9 +256,17 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 			"Use the \"allow_unsafe_interrupts\" module parameter to override\n");
 	}
 
-	rc = iommu_device_claim_dma_owner(dev, ictx, restore_token);
-	if (rc)
-		goto out_group_put;
+	/* If restoring, try to reclaim dma ownership. */
+	rc = -EINVAL;
+	if (restore_token)
+		rc = iommu_device_reclaim_dma_owner(dev, ictx, restore_token);
+
+	/* Fallback to normal claim dma owner if restoring. */
+	if (rc) {
+		rc = iommu_device_claim_dma_owner(dev, ictx);
+		if (rc)
+			goto out_group_put;
+	}
 
 	idev = iommufd_object_alloc(ictx, idev, IOMMUFD_OBJ_DEVICE);
 	if (IS_ERR(idev)) {

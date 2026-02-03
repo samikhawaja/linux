@@ -195,6 +195,8 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	struct iommu *iommu;
 	int session_fd;
 	int device_fd;
+	int iommufd;
+	int dev_id;
 	int memfd;
 	int stage;
 
@@ -220,7 +222,11 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	printf("Finishing the session before binding to iommufd (should fail)\n");
 	VFIO_ASSERT_NE(luo_session_finish(session_fd), 0);
 
-	VFIO_ASSERT_EQ(luo_session_retrieve_fd(session_fd, IOMMUFD_TOKEN), -EOPNOTSUPP);
+	iommufd = luo_session_retrieve_fd(session_fd, IOMMUFD_TOKEN);
+	VFIO_ASSERT_GE(iommufd, 0);
+
+	printf("Binding the device to an iommufd and setting it up\n");
+	dev_id = vfio_device_bind_iommufd(device_fd, iommufd);
 
 	iommu = iommu_init("iommufd");
 
@@ -254,6 +260,9 @@ static void after_kexec(int luo_fd, int state_session_fd)
 		vfio_pci_driver_init(device);
 		dma_memcpy_one(device);
 	}
+
+	printf("Finishing the session\n");
+	VFIO_ASSERT_EQ(luo_session_finish(session_fd), 0);
 
 	vfio_pci_device_cleanup(device);
 	iommu_cleanup(iommu);
