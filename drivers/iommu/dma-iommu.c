@@ -922,6 +922,49 @@ static struct page **__iommu_dma_alloc_pages(struct device *dev,
 	return pages;
 }
 
+static int __iommu_dma_map_noncontiguous(struct device *dev, struct page **pages,
+					 unsigned long iova, size_t size, struct sg_table *sgt,
+					 gfp_t gfp, pgprot_t prot, unsigned long attrs)
+{
+	struct iommu_domain *domain = iommu_get_dma_domain(dev);
+	bool coherent = dev_is_dma_coherent(dev);
+	int ioprot = dma_info_to_prot(DMA_BIDIRECTIONAL, coherent, attrs);
+	ssize_t ret;
+	int count;
+
+	/*
+	 * Remove the zone/policy flags from the GFP - these are applied to the
+	 * __iommu_dma_alloc_pages() but are not used for the supporting
+	 * internal allocations that follow.
+	 */
+	gfp &= ~(__GFP_DMA | __GFP_DMA32 | __GFP_HIGHMEM | __GFP_COMP);
+
+	count = PAGE_ALIGN(size) >> PAGE_SHIFT;
+	if (sg_alloc_table_from_pages(sgt, pages, count, 0, size, gfp))
+		return -ENOMEM;
+
+	if (!(ioprot & IOMMU_CACHE)) {
+		struct scatterlist *sg;
+		int i;
+
+		for_each_sg(sgt->sgl, sg, sgt->orig_nents, i)
+			arch_dma_prep_coherent(sg_page(sg), sg->length);
+	}
+
+	ret = iommu_map_sg(domain, iova, sgt->sgl, sgt->orig_nents, ioprot,
+			   gfp);
+	if (ret < 0 || ret < size)
+		goto out_free_sg;
+
+	sgt->sgl->dma_address = iova;
+	sgt->sgl->dma_length = size;
+	return 0;
+
+out_free_sg:
+	sg_free_table(sgt);
+	return ret;
+}
+
 /*
  * If size is less than PAGE_SIZE, then a full CPU page will be allocated,
  * but an IOMMU which supports smaller pages might not map the whole thing.
@@ -932,8 +975,6 @@ static struct page **__iommu_dma_alloc_noncontiguous(struct device *dev,
 	struct iommu_domain *domain = iommu_get_dma_domain(dev);
 	struct iommu_dma_cookie *cookie = domain->iova_cookie;
 	struct iova_domain *iovad = &cookie->iovad;
-	bool coherent = dev_is_dma_coherent(dev);
-	int ioprot = dma_info_to_prot(DMA_BIDIRECTIONAL, coherent, attrs);
 	unsigned int count, min_size, alloc_sizes = domain->pgsize_bitmap;
 	struct page **pages;
 	dma_addr_t iova;
@@ -964,35 +1005,12 @@ static struct page **__iommu_dma_alloc_noncontiguous(struct device *dev,
 	if (!iova)
 		goto out_free_pages;
 
-	/*
-	 * Remove the zone/policy flags from the GFP - these are applied to the
-	 * __iommu_dma_alloc_pages() but are not used for the supporting
-	 * internal allocations that follow.
-	 */
-	gfp &= ~(__GFP_DMA | __GFP_DMA32 | __GFP_HIGHMEM | __GFP_COMP);
-
-	if (sg_alloc_table_from_pages(sgt, pages, count, 0, size, gfp))
+	ret = __iommu_dma_map_noncontiguous(dev, pages, iova, size, sgt, gfp, prot, attrs);
+	if (ret)
 		goto out_free_iova;
 
-	if (!(ioprot & IOMMU_CACHE)) {
-		struct scatterlist *sg;
-		int i;
-
-		for_each_sg(sgt->sgl, sg, sgt->orig_nents, i)
-			arch_dma_prep_coherent(sg_page(sg), sg->length);
-	}
-
-	ret = iommu_map_sg(domain, iova, sgt->sgl, sgt->orig_nents, ioprot,
-			   gfp);
-	if (ret < 0 || ret < size)
-		goto out_free_sg;
-
-	sgt->sgl->dma_address = iova;
-	sgt->sgl->dma_length = size;
 	return pages;
 
-out_free_sg:
-	sg_free_table(sgt);
 out_free_iova:
 	iommu_dma_free_iova(domain, iova, size, NULL);
 out_free_pages:
