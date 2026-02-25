@@ -6,6 +6,8 @@
  */
 #include <linux/memblock.h> /* for max_pfn */
 #include <linux/export.h>
+#include <linux/kexec_handover.h>
+#include <linux/kho/abi/dma_alloc.h>
 #include <linux/mm.h>
 #include <linux/dma-map-ops.h>
 #include <linux/scatterlist.h>
@@ -304,6 +306,118 @@ out_free_pages:
 	__dma_direct_free_pages(dev, page, size);
 	return NULL;
 out_leak_pages:
+	return NULL;
+}
+
+int dma_direct_preserve_alloc(struct device *dev, void *cpu_addr,
+			      size_t size, dma_addr_t dma_handle,
+			      gfp_t gfp, unsigned long attrs, u64 *state)
+{
+	struct dma_alloc_ser *ser;
+	int ret;
+
+	if ((attrs & DMA_ATTR_NO_KERNEL_MAPPING) &&
+	    !force_dma_unencrypted(dev) && !is_swiotlb_for_alloc(dev))
+		return -EOPNOTSUPP;
+
+	if (!IS_ENABLED(CONFIG_ARCH_HAS_DMA_SET_UNCACHED) &&
+	    !IS_ENABLED(CONFIG_DMA_DIRECT_REMAP) &&
+	    !IS_ENABLED(CONFIG_DMA_GLOBAL_POOL) &&
+	    !dev_is_dma_coherent(dev) &&
+	    !is_swiotlb_for_alloc(dev))
+		return -EOPNOTSUPP;
+
+	if (IS_ENABLED(CONFIG_DMA_GLOBAL_POOL) &&
+	    !dev_is_dma_coherent(dev))
+		return -EOPNOTSUPP;
+
+	ser = kho_alloc_preserve(sizeof(*ser) + sizeof(u64));
+	if (!ser)
+		return -ENOMEM;
+
+	ser->is_contiguous = true;
+	ser->nr_pages = 1;
+	ser->iova = dma_handle;
+	*state = virt_to_phys(ser);
+	ser->page_phys[0] = dma_to_phys(dev, dma_handle);
+
+	if (page_size(phys_to_page(ser->page_phys[0])) == size) {
+		ser->is_folio = true;
+		ret = kho_preserve_folio(phys_folio(ser->page_phys[0]));
+	} else {
+		ser->is_folio = false;
+		ret = kho_preserve_pages(phys_to_page(ser->page_phys[0]), size);
+	}
+
+	if (ret)
+		goto err;
+
+	return 0;
+err:
+	kho_unpreserve_free(ser);
+	return ret;
+}
+
+void *dma_direct_restore_alloc(struct device *dev, size_t size,
+			       dma_addr_t *dma_handle, gfp_t gfp,
+			       unsigned long attrs, u64 state)
+{
+	struct dma_alloc_ser *ser = NULL;
+	struct page *page;
+	void *cpu_addr;
+
+	ser = phys_to_virt(state);
+
+	if (ser->is_folio) {
+		if(!kho_restore_folio(ser->page_phys[0]))
+			goto err;
+
+		page = phys_to_page(ser->page_phys[0]);
+		if (size != page_size(page))
+			goto err;
+	} else {
+		/* Handle contiguous zero-order pages. */
+		if(!kho_restore_pages(ser->page_phys[0], ser->nr_pages))
+			goto err;
+
+		page = phys_to_page(ser->page_phys[0]);
+		if ((ser->nr_pages << PAGE_SHIFT) != size)
+			goto err;
+	}
+
+	if (!dev_is_dma_coherent(dev))
+		goto err;
+
+	if ((attrs & DMA_ATTR_NO_KERNEL_MAPPING) &&
+	    !force_dma_unencrypted(dev) && !is_swiotlb_for_alloc(dev))
+		goto err;
+
+	if (force_dma_unencrypted(dev) && dma_direct_use_pool(dev, gfp))
+		goto err;
+
+	if (PageHighMem(page)) {
+		pgprot_t prot = dma_pgprot(dev, PAGE_KERNEL, attrs);
+
+		if (force_dma_unencrypted(dev))
+			prot = pgprot_decrypted(prot);
+
+		/* remove any dirty cache lines on the kernel alias */
+		arch_dma_prep_coherent(page, size);
+
+		/* create a coherent mapping */
+		cpu_addr = dma_common_contiguous_remap(page, size, prot,
+				__builtin_return_address(0));
+		if (!cpu_addr)
+			goto err;
+	} else {
+		cpu_addr = page_address(page);
+		if (dma_set_decrypted(dev, cpu_addr, size))
+			goto err;
+	}
+
+	return cpu_addr;
+err:
+	kho_restore_free(ser);
 	return NULL;
 }
 
