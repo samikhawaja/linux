@@ -169,7 +169,7 @@ dma_addr_t dma_map_resource(struct device *dev, phys_addr_t phys_addr,
 void dma_unmap_resource(struct device *dev, dma_addr_t addr, size_t size,
 		enum dma_data_direction dir, unsigned long attrs);
 void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *dma_handle,
-		gfp_t flag, unsigned long attrs);
+		      gfp_t flag, unsigned long attrs);
 void dma_free_attrs(struct device *dev, size_t size, void *cpu_addr,
 		dma_addr_t dma_handle, unsigned long attrs);
 void *dmam_alloc_attrs(struct device *dev, size_t size, dma_addr_t *dma_handle,
@@ -200,6 +200,15 @@ void *dma_vmap_noncontiguous(struct device *dev, size_t size,
 void dma_vunmap_noncontiguous(struct device *dev, void *vaddr);
 int dma_mmap_noncontiguous(struct device *dev, struct vm_area_struct *vma,
 		size_t size, struct sg_table *sgt);
+#if CONFIG_LIVEUPDATE
+int dma_preserve_alloc_attrs(struct device *dev, void *cpu_addr,
+			     size_t size, dma_addr_t dma_handle,
+			     gfp_t gfp, unsigned long attrs, u64 *state);
+void dma_unpreserve_alloc_attrs(struct device *dev, u64 state);
+void *dma_restore_alloc_attrs(struct device *dev, size_t size,
+			      dma_addr_t *dma_handle, gfp_t gfp,
+			      unsigned long attrs, u64 state);
+#endif
 #else /* CONFIG_HAS_DMA */
 static inline dma_addr_t dma_map_page_attrs(struct device *dev,
 		struct page *page, size_t offset, size_t size,
@@ -486,6 +495,25 @@ static inline bool dma_need_unmap(struct device *dev)
 }
 #endif /* !CONFIG_HAS_DMA || !CONFIG_DMA_NEED_SYNC */
 
+#if !defined(CONFIG_LIVEUPDATE) || !defined(CONFIG_HAS_DMA)
+int dma_preserve_alloc_attrs(struct device *dev, void *cpu_addr,
+			     size_t size, dma_addr_t dma_handle,
+			     u64 *state, gfp_t gfp, unsigned long attrs)
+{
+	return -EOPNOTSUPP;
+}
+
+void dma_unpreserve_alloc_attrs(struct device *dev, u64 state)
+{
+}
+void *dma_restore_alloc_attrs(struct device *dev, size_t size,
+			      dma_addr_t *dma_handle, gfp_t gfp,
+			      unsigned long attrs, u64 state)
+{
+	return NULL;
+}
+#endif
+
 struct page *dma_alloc_pages(struct device *dev, size_t size,
 		dma_addr_t *dma_handle, enum dma_data_direction dir, gfp_t gfp);
 void dma_free_pages(struct device *dev, size_t size, struct page *page,
@@ -608,12 +636,29 @@ static inline void *dma_alloc_coherent(struct device *dev, size_t size,
 			(gfp & __GFP_NOWARN) ? DMA_ATTR_NO_WARN : 0);
 }
 
+static inline int dma_preserve_alloc_coherent(struct device *dev, void *cpu_addr,
+					      size_t size, dma_addr_t dma_handle,
+					      gfp_t gfp, u64 *state)
+{
+	return dma_preserve_alloc_attrs(dev, cpu_addr, size, dma_handle, gfp,
+					(gfp & __GFP_NOWARN) ? DMA_ATTR_NO_WARN : 0,
+					state);
+}
+
+static inline void *dma_restore_alloc_coherent(struct device *dev, size_t size,
+					       dma_addr_t *dma_handle,
+					       gfp_t gfp, u64 state)
+{
+	return dma_restore_alloc_attrs(dev, size, dma_handle, gfp,
+				       (gfp & __GFP_NOWARN) ? DMA_ATTR_NO_WARN : 0,
+				       state);
+}
+
 static inline void dma_free_coherent(struct device *dev, size_t size,
 		void *cpu_addr, dma_addr_t dma_handle)
 {
 	return dma_free_attrs(dev, size, cpu_addr, dma_handle, 0);
 }
-
 
 static inline u64 dma_get_mask(struct device *dev)
 {

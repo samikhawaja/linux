@@ -12,6 +12,8 @@
 #include <linux/gfp.h>
 #include <linux/iommu-dma.h>
 #include <linux/kmsan.h>
+#include <linux/kexec_handover.h>
+#include <linux/kho/abi/dma_alloc.h>
 #include <linux/of_device.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
@@ -618,6 +620,75 @@ u64 dma_get_required_mask(struct device *dev)
 	return DMA_BIT_MASK(32);
 }
 EXPORT_SYMBOL_GPL(dma_get_required_mask);
+
+int dma_preserve_alloc_attrs(struct device *dev, void *cpu_addr,
+			     size_t size, dma_addr_t dma_handle,
+			     gfp_t gfp, unsigned long attrs, u64 *state)
+{
+	const struct dma_map_ops *ops = get_dma_ops(dev);
+
+#ifdef CONFIG_DMA_DECLARE_COHERENT
+	return -EOPNOTSUPP;
+#endif
+
+	if (dma_alloc_direct(dev, ops))
+		return dma_direct_preserve_alloc(dev, cpu_addr, size,
+						 dma_handle, gfp, attrs,
+						 state);
+	if (ops->preserve_alloc)
+		return ops->preserve_alloc(dev, cpu_addr, size, dma_handle,
+					   gfp, attrs, state);
+
+	return -EOPNOTSUPP;
+}
+EXPORT_SYMBOL_GPL(dma_preserve_alloc_attrs);
+
+void dma_unpreserve_alloc_attrs(struct device *dev, u64 serialized_state)
+{
+	struct dma_alloc_ser *ser;
+	int i;
+
+	WARN_ON_ONCE(!dev->coherent_dma_mask);
+
+#ifdef CONFIG_DMA_DECLARE_COHERENT
+	return;
+#endif
+
+	ser = phys_to_virt(serialized_state);
+	if (ser->is_folio) {
+		for (i = 0; i < ser->nr_pages; ++i)
+			kho_unpreserve_folio(phys_folio(ser->page_phys[i]));
+	} else {
+		kho_unpreserve_pages(phys_to_page(ser->page_phys[0]),
+				     ser->nr_pages);
+	}
+
+	kho_unpreserve_free(ser);
+}
+EXPORT_SYMBOL(dma_unpreserve_alloc_attrs);
+
+void *dma_restore_alloc_attrs(struct device *dev, size_t size,
+			      dma_addr_t *dma_handle, gfp_t gfp,
+			      unsigned long attrs, u64 state)
+{
+	const struct dma_map_ops *ops = get_dma_ops(dev);
+
+	WARN_ON_ONCE(!dev->coherent_dma_mask);
+
+#ifdef CONFIG_DMA_DECLARE_COHERENT
+	return NULL;
+#endif
+
+	if (dma_alloc_direct(dev, ops))
+		return dma_direct_restore_alloc(dev, size, dma_handle, gfp,
+						attrs, state);
+	else if (ops->restore_alloc)
+		return ops->restore_alloc(dev, size, dma_handle, gfp, attrs,
+					  state);
+
+	return NULL;
+}
+EXPORT_SYMBOL(dma_restore_alloc_attrs);
 
 void *dma_alloc_attrs(struct device *dev, size_t size, dma_addr_t *dma_handle,
 		gfp_t flag, unsigned long attrs)

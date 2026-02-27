@@ -17,6 +17,12 @@ struct dma_map_ops {
 	void *(*alloc)(struct device *dev, size_t size,
 			dma_addr_t *dma_handle, gfp_t gfp,
 			unsigned long attrs);
+	int (*preserve_alloc)(struct device *dev, void *cpu_addr,
+			      size_t size, dma_addr_t dma_handle,
+			      gfp_t gfp, unsigned long attrs, u64 *state);
+	void *(*restore_alloc)(struct device *dev, size_t size,
+			       dma_addr_t *dma_handle, gfp_t gfp,
+			       unsigned long attrs, u64 state);
 	void (*free)(struct device *dev, size_t size, void *vaddr,
 			dma_addr_t dma_handle, unsigned long attrs);
 	struct page *(*alloc_pages_op)(struct device *dev, size_t size,
