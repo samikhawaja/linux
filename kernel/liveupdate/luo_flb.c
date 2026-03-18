@@ -49,6 +49,7 @@
 #include <linux/liveupdate.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
+#include <linux/rwsem.h>
 #include <linux/slab.h>
 #include <linux/unaligned.h>
 #include "luo_internal.h"
@@ -70,6 +71,7 @@ struct luo_flb_global {
 	long count;
 };
 
+static DECLARE_RWSEM(luo_flb_lock);
 static struct luo_flb_global luo_flb_global = {
 	.list = LIST_HEAD_INIT(luo_flb_global.list),
 };
@@ -256,6 +258,8 @@ int luo_flb_file_preserve(struct liveupdate_file_handler *fh)
 	struct luo_flb_link *iter;
 	int err = 0;
 
+	guard(rwsem_read)(&ACCESS_PRIVATE(fh, flb_lock));
+
 	list_for_each_entry(iter, flb_list, list) {
 		err = luo_flb_file_preserve_one(iter->flb);
 		if (err)
@@ -288,6 +292,8 @@ void luo_flb_file_unpreserve(struct liveupdate_file_handler *fh)
 	struct list_head *flb_list = &ACCESS_PRIVATE(fh, flb_list);
 	struct luo_flb_link *iter;
 
+	guard(rwsem_read)(&ACCESS_PRIVATE(fh, flb_lock));
+
 	list_for_each_entry_reverse(iter, flb_list, list)
 		luo_flb_file_unpreserve_one(iter->flb);
 }
@@ -307,6 +313,8 @@ void luo_flb_file_finish(struct liveupdate_file_handler *fh)
 {
 	struct list_head *flb_list = &ACCESS_PRIVATE(fh, flb_list);
 	struct luo_flb_link *iter;
+
+	guard(rwsem_read)(&ACCESS_PRIVATE(fh, flb_lock));
 
 	list_for_each_entry_reverse(iter, flb_list, list)
 		luo_flb_file_finish_one(iter->flb);
@@ -370,6 +378,9 @@ int liveupdate_register_flb(struct liveupdate_file_handler *fh,
 	 */
 	if (!luo_session_quiesce())
 		return -EBUSY;
+
+	guard(rwsem_write)(&luo_flb_lock);
+	guard(rwsem_write)(&ACCESS_PRIVATE(fh, flb_lock));
 
 	/* Check that this FLB is not already linked to this file handler */
 	err = -EEXIST;
@@ -459,6 +470,9 @@ int liveupdate_unregister_flb(struct liveupdate_file_handler *fh,
 	 */
 	if (!luo_session_quiesce())
 		return -EBUSY;
+
+	guard(rwsem_write)(&luo_flb_lock);
+	guard(rwsem_write)(&ACCESS_PRIVATE(fh, flb_lock));
 
 	/* Find and remove the link from the file handler's list */
 	list_for_each_entry(iter, flb_list, list) {
@@ -653,6 +667,8 @@ void luo_flb_serialize(void)
 	struct luo_flb_header *fh = &luo_flb_global.outgoing;
 	struct liveupdate_flb *gflb;
 	int i = 0;
+
+	guard(rwsem_read)(&luo_flb_lock);
 
 	list_private_for_each_entry(gflb, &luo_flb_global.list, private.list) {
 		struct luo_flb_private *private = luo_flb_get_private(gflb);
