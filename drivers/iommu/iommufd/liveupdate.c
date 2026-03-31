@@ -341,9 +341,8 @@ int iommufd_liveupdate_register_lufs(void)
 	return ret;
 }
 
-int iommufd_liveupdate_unregister_lufs(void)
+void iommufd_liveupdate_unregister_lufs(void)
 {
-	WARN_ON(iommu_liveupdate_unregister_flb(&iommufd_lu_handler));
-
-	return liveupdate_unregister_file_handler(&iommufd_lu_handler);
+	iommu_liveupdate_unregister_flb(&iommufd_lu_handler);
+	liveupdate_unregister_file_handler(&iommufd_lu_handler);
 }

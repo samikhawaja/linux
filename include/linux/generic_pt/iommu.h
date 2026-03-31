@@ -278,10 +278,10 @@ struct pt_iommu_cfg {
  * iommu_pt
  */
 #define IOMMU_PT_DOMAIN_OPS(fmt)                        \
-	.iova_to_phys = &pt_iommu_##fmt##_iova_to_phys
+	.iova_to_phys = &pt_iommu_##fmt##_iova_to_phys, \
 	.preserve = &pt_iommu_##fmt##_preserve,		\
 	.unpreserve = &pt_iommu_##fmt##_unpreserve,	\
-	.restore = &pt_iommu_##fmt##_restore,		\
+	.restore = &pt_iommu_##fmt##_restore
 #define IOMMU_PT_DIRTY_OPS(fmt) \
 	.read_and_clear_dirty = &pt_iommu_##fmt##_read_and_clear_dirty
 

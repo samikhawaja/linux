@@ -171,9 +171,9 @@ int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler)
 }
 EXPORT_SYMBOL(iommu_liveupdate_register_flb);
 
-int iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler)
+void iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler)
 {
-	return liveupdate_unregister_flb(handler, &iommu_flb);
+	liveupdate_unregister_flb(handler, &iommu_flb);
 }
 EXPORT_SYMBOL(iommu_liveupdate_unregister_flb);
 
@@ -532,3 +532,5 @@ struct iommu_domain *iommu_restore_domain(struct device *dev, struct device_ser 
 	domain_ser->restored_domain = domain;
 	return domain;
 }
+
+

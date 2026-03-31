@@ -139,6 +139,6 @@ static inline void iommu_unpreserve_device(struct iommu_domain *domain, struct d
 #endif
 
 int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
-int iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler);
+void iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler);
 
 #endif /* _LINUX_IOMMU_LU_H */

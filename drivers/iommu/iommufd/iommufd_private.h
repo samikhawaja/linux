@@ -715,7 +715,7 @@ iommufd_get_vdevice(struct iommufd_ctx *ictx, u32 id)
 
 #ifdef CONFIG_IOMMU_LIVEUPDATE
 int iommufd_liveupdate_register_lufs(void);
-int iommufd_liveupdate_unregister_lufs(void);
+void iommufd_liveupdate_unregister_lufs(void);
 
 int iommufd_hwpt_lu_set_preserve(struct iommufd_ucmd *ucmd);
 static inline bool iopt_lu_map_immutable(const struct io_pagetable *iopt)
@@ -728,7 +728,7 @@ static inline int iommufd_liveupdate_register_lufs(void)
 	return 0;
 }
 
-static inline int iommufd_liveupdate_unregister_lufs(void)
+static inline void iommufd_liveupdate_unregister_lufs(void)
 {
 	return 0;
 }
