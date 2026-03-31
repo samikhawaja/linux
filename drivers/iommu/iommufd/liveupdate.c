@@ -319,6 +319,7 @@ static struct liveupdate_file_ops iommufd_lu_file_ops = {
 	.retrieve = iommufd_liveupdate_retrieve,
 	.can_finish = iommufd_liveupdate_can_finish,
 	.finish = iommufd_liveupdate_finish,
+	.owner = THIS_MODULE,
 };
 
 static struct liveupdate_file_handler iommufd_lu_handler = {
