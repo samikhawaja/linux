@@ -234,19 +234,74 @@ out_unlock:
 static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 {
 	struct iommufd_ctx *ictx = iommufd_ctx_from_file(args->file);
-	struct iommufd_hwpt_paging *hwpt;
+	struct iommufd_hwpt_paging *hwpt, **hwpt_array = NULL;
+	struct iommufd_ioas **ioas_array = NULL;
+	unsigned int nr_visited_ioas = 0;
+	unsigned int nr_hwpts = 0;
 	unsigned long index;
+	bool already_visited;
+	unsigned int i, j;
 
 	if (WARN_ON(IS_ERR(ictx)))
 		return;
 
 	mutex_lock(&ictx->liveupdate_mutex);
-	xa_for_each(&ictx->liveupdate_tokens, index, hwpt) {
-		if (!hwpt->common.domain)
-			continue;
+	xa_for_each(&ictx->liveupdate_tokens, index, hwpt)
+		nr_hwpts++;
 
-		iommu_domain_unpreserve(hwpt->common.domain);
+	if (!nr_hwpts)
+		goto out_unlock;
+
+	hwpt_array = kcalloc(nr_hwpts, sizeof(*hwpt_array), GFP_KERNEL);
+	ioas_array = kcalloc(nr_hwpts, sizeof(*ioas_array), GFP_KERNEL);
+	if (WARN_ON(!hwpt_array || !ioas_array))
+		goto out_free;
+
+	i = 0;
+	xa_for_each(&ictx->liveupdate_tokens, index, hwpt)
+		hwpt_array[i++] = hwpt;
+
+	for (i = 0; i < nr_hwpts; i++) {
+		hwpt = hwpt_array[i];
+		already_visited = false;
+
+		if (hwpt->ioas) {
+			for (j = 0; j < nr_visited_ioas; j++) {
+				if (ioas_array[j] == hwpt->ioas) {
+					already_visited = true;
+					break;
+				}
+			}
+
+			if (!already_visited)
+				ioas_array[nr_visited_ioas++] = hwpt->ioas;
+		}
+
+		if (hwpt->common.domain) {
+			if (hwpt->ioas)
+				down_read(&hwpt->ioas->iopt.domains_rwsem);
+
+			iommu_domain_unpreserve(hwpt->common.domain);
+
+			if (hwpt->ioas)
+				up_read(&hwpt->ioas->iopt.domains_rwsem);
+		}
 	}
+
+	for (j = 0; j < nr_visited_ioas; j++) {
+		struct iommufd_ioas *ioas = ioas_array[j];
+
+		down_write(&ioas->iopt.domains_rwsem);
+		down_write(&ioas->iopt.iova_rwsem);
+		ioas->iopt.lu_map_immutable = false;
+		up_write(&ioas->iopt.iova_rwsem);
+		up_write(&ioas->iopt.domains_rwsem);
+	}
+
+out_free:
+	kfree(hwpt_array);
+	kfree(ioas_array);
+out_unlock:
 	mutex_unlock(&ictx->liveupdate_mutex);
 
 	kho_unpreserve_free(phys_to_virt(args->serialized_data));

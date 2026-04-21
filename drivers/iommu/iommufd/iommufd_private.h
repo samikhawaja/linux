@@ -95,6 +95,9 @@ struct io_pagetable {
 	/* IOVA that cannot be allocated, struct iopt_reserved */
 	struct rb_root_cached reserved_itree;
 	u8 disable_large_pages;
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	bool lu_map_immutable;
+#endif
 	unsigned long iova_alignment;
 };
 
@@ -717,6 +720,11 @@ int iommufd_liveupdate_register(void);
 void iommufd_liveupdate_unregister(void);
 
 int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd);
+
+static inline bool iopt_liveupdate_map_immutable(const struct io_pagetable *iopt)
+{
+	return iopt->lu_map_immutable;
+}
 #else
 static inline int iommufd_liveupdate_register(void)
 {
@@ -730,6 +738,11 @@ static inline void iommufd_liveupdate_unregister(void)
 static inline int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 {
 	return -ENOTTY;
+}
+
+static inline bool iopt_liveupdate_map_immutable(const struct io_pagetable *iopt)
+{
+	return false;
 }
 #endif
 
