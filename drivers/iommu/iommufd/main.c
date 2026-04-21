@@ -313,6 +313,10 @@ static int iommufd_fops_open(struct inode *inode, struct file *filp)
 	init_rwsem(&ictx->ioas_creation_lock);
 	xa_init_flags(&ictx->objects, XA_FLAGS_ALLOC1 | XA_FLAGS_ACCOUNT);
 	xa_init(&ictx->groups);
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	xa_init(&ictx->liveupdate_tokens);
+	mutex_init(&ictx->liveupdate_mutex);
+#endif
 	ictx->file = filp;
 	mt_init_flags(&ictx->mt_mmap, MT_FLAGS_ALLOC_RANGE);
 	init_waitqueue_head(&ictx->destroy_wait);
@@ -377,6 +381,7 @@ static int iommufd_fops_release(struct inode *inode, struct file *filp)
 	xa_destroy(&ictx->objects);
 #ifdef CONFIG_IOMMU_LIVEUPDATE
 	xa_destroy(&ictx->liveupdate_tokens);
+	mutex_destroy(&ictx->liveupdate_mutex);
 #endif
 
 	WARN_ON(!xa_empty(&ictx->groups));
