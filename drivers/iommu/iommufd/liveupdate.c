@@ -80,7 +80,7 @@ static int check_iopt_pages_preserved(struct liveupdate_session *s,
 		 * When this memory file was mapped it should be sealed and seal
 		 * should be sealed. This means that since mapping was done the
 		 * memory file was not grown or shrink and the pages being used
-		 * until now remain pinnned and preserved.
+		 * until now remain pinned and preserved.
 		 */
 		if ((pages->seals & req_seals) != req_seals) {
 			ret = -EINVAL;
@@ -97,21 +97,59 @@ static int check_iopt_pages_preserved(struct liveupdate_session *s,
 	return ret;
 }
 
+static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
+			     struct iommufd_hwpt_ser *hwpt_ser,
+			     struct iommufd_ioas **ioas_array,
+			     unsigned int *nr_visited_ioas,
+			     struct liveupdate_session *session)
+{
+	struct iommu_domain_ser *domain_ser;
+	bool already_visited = false;
+	unsigned int j;
+	int rc;
+
+	if (hwpt->ioas) {
+		for (j = 0; j < *nr_visited_ioas; j++) {
+			if (ioas_array[j] == hwpt->ioas) {
+				already_visited = true;
+				break;
+			}
+		}
+
+		if (!already_visited) {
+			mutex_lock(&hwpt->ioas->mutex);
+			rc = check_iopt_pages_preserved(session, hwpt);
+			mutex_unlock(&hwpt->ioas->mutex);
+			if (rc)
+				return rc;
+
+			ioas_array[(*nr_visited_ioas)++] = hwpt->ioas;
+		}
+	}
+
+	hwpt_ser->token = hwpt->liveupdate_token;
+	hwpt_ser->reclaimed = false;
+
+	rc = iommu_domain_preserve(hwpt->common.domain, &domain_ser);
+	if (rc < 0)
+		return rc;
+
+	hwpt_ser->domain_data = __pa(domain_ser);
+	return 0;
+}
+
 static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 {
 	struct iommufd_ctx *ictx = iommufd_ctx_from_file(args->file);
 	struct iommufd_hwpt_paging *hwpt, **hwpt_array = NULL;
 	struct iommufd_ioas **ioas_array = NULL;
 	struct iommufd_ser *iommufd_ser = NULL;
-	struct iommu_domain_ser *domain_ser;
-	struct iommufd_hwpt_ser *hwpt_ser;
 	unsigned int nr_visited_ioas = 0;
 	unsigned int nr_hwpts = 0;
 	unsigned long index;
 	size_t serial_size;
-	bool already_visited;
-	unsigned int i, j;
 	void *mem = NULL;
+	unsigned int i;
 	int rc = 0;
 
 	if (IS_ERR(ictx))
@@ -147,43 +185,17 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 
 	/* Pass 2: Gather */
 	i = 0;
-	xa_for_each(&ictx->liveupdate_tokens, index, hwpt) {
+	xa_for_each(&ictx->liveupdate_tokens, index, hwpt)
 		hwpt_array[i++] = hwpt;
-	}
 
-	/* Pass 3: Validate and Serialize */
+	/* Pass 3: Save */
 	for (i = 0; i < nr_hwpts; i++) {
-		hwpt = hwpt_array[i];
-		already_visited = false;
-
-		if (hwpt->ioas) {
-			for (j = 0; j < nr_visited_ioas; j++) {
-				if (ioas_array[j] == hwpt->ioas) {
-					already_visited = true;
-					break;
-				}
-			}
-
-			if (!already_visited) {
-				mutex_lock(&hwpt->ioas->mutex);
-				rc = check_iopt_pages_preserved(args->session, hwpt);
-				mutex_unlock(&hwpt->ioas->mutex);
-				if (rc)
-					goto out_free_mem;
-
-				ioas_array[nr_visited_ioas++] = hwpt->ioas;
-			}
-		}
-
-		hwpt_ser = &iommufd_ser->hwpt_array[i];
-		hwpt_ser->token = hwpt->liveupdate_token;
-		hwpt_ser->reclaimed = false;
-
-		rc = iommu_domain_preserve(hwpt->common.domain, &domain_ser);
-		if (rc < 0)
-			goto out_free_mem;
-
-		hwpt_ser->domain_data = __pa(domain_ser);
+		rc = iommufd_preserve_hwpt(hwpt_array[i],
+					   &iommufd_ser->hwpt_array[i],
+					   ioas_array, &nr_visited_ioas,
+					   args->session);
+		if (rc)
+			goto out_unpreserve_hwpts;
 	}
 
 	args->serialized_data = virt_to_phys(iommufd_ser);
@@ -192,6 +204,21 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	mutex_unlock(&ictx->liveupdate_mutex);
 	iommufd_ctx_put(ictx);
 	return 0;
+
+out_unpreserve_hwpts:
+	for (; i >= 0; i--) {
+		/* TODO: Need to take domain rwsem here before doing unpreserve. */
+		iommu_domain_unpreserve(hwpt_array[i]->common.domain);
+	}
+
+	i = nr_visited_ioas;
+	for (; i >= 0; i--) {
+		down_read(&hwpt->ioas->iopt.iova_rwsem);
+		/*TODO: Need to take domain rwsem also to make sure there are no
+		 * ongoing mappings. */
+		//ioas_array[i]->iopt. make immutable here.
+		up_read(&hwpt->ioas->iopt.iova_rwsem);
+	}
 
 out_free_mem:
 	if (mem)

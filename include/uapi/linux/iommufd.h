@@ -1356,6 +1356,9 @@ struct iommu_hw_queue_alloc {
  * @hwpt_token: Token to identify this hwpt upon restore
  *
  * The target HWPT will be preserved during iommufd preservation.
+ * Only file-based memory mappings (e.g. memfd) are supported for HWPTs marked
+ * for preservation. Mapping anonymous memory into a preserved HWPT will result
+ * in a failure during the preservation phase.
  *
  * The hwpt_token is provided by userspace. If userspace enters a token
  * already in use within this iommufd, -EADDRINUSE is returned from this ioctl.
