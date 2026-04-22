@@ -332,9 +332,6 @@ static int iommufd_fops_release(struct inode *inode, struct file *filp)
 	struct iommufd_sw_msi_map *cur;
 	struct iommufd_object *obj;
 
-#ifdef CONFIG_IOMMU_LIVEUPDATE
-#endif
-
 	/*
 	 * The objects in the xarray form a graph of "users" counts, and we have
 	 * to destroy them in a depth first manner. Leaf objects will reduce the

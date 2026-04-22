@@ -14,6 +14,13 @@
 #include "iommufd_private.h"
 #include "io_pagetable.h"
 
+static void ioas_set_immutable(struct iommufd_ioas *ioas, bool immutable)
+{
+	down_write(&ioas->iopt.domains_rwsem);
+	ioas->iopt.lu_map_immutable = immutable;
+	up_write(&ioas->iopt.domains_rwsem);
+}
+
 int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 {
 	struct iommu_hwpt_liveupdate_mark_preserve *cmd = ucmd->cmd;
@@ -30,7 +37,6 @@ int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 	mutex_lock(&ictx->liveupdate_mutex);
 
 	xa_lock(&ictx->objects);
-	/* Collision check: token must be unique across all marked HWPTs */
 	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
 		if (WARN_ON_ONCE(obj->type != IOMMUFD_OBJ_HWPT_PAGING))
 			continue;
@@ -96,29 +102,22 @@ static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
 				 struct liveupdate_session *session)
 {
 	struct iommu_domain_ser *domain_ser;
+	bool ioas_made_immutable = false;
 	int rc;
 
-	if (hwpt->ioas) {
-		mutex_lock(&hwpt->ioas->mutex);
-		if (!hwpt->ioas->iopt.lu_map_immutable) {
-			down_write(&hwpt->ioas->iopt.domains_rwsem);
-			down_write(&hwpt->ioas->iopt.iova_rwsem);
-			hwpt->ioas->iopt.lu_map_immutable = true;
-			up_write(&hwpt->ioas->iopt.iova_rwsem);
-			up_write(&hwpt->ioas->iopt.domains_rwsem);
+	if (!hwpt->ioas->iopt.lu_map_immutable) {
+		/*
+		 * Make IOAS immutable so the DMA mappings do not change while
+		 * the HWPT is preserved. Since one IOAS can have multiple
+		 * HWPTs, if an error occurs this call needs to make the IOAS
+		 * mutable again if it was the one that made it immutable.
+		 */
+		ioas_made_immutable = true;
+		ioas_set_immutable(hwpt->ioas, true);
 
-			rc = check_iopt_pages_preserved(session, hwpt);
-			if (rc) {
-				down_write(&hwpt->ioas->iopt.domains_rwsem);
-				down_write(&hwpt->ioas->iopt.iova_rwsem);
-				hwpt->ioas->iopt.lu_map_immutable = false;
-				up_write(&hwpt->ioas->iopt.iova_rwsem);
-				up_write(&hwpt->ioas->iopt.domains_rwsem);
-				mutex_unlock(&hwpt->ioas->mutex);
-				return rc;
-			}
-		}
-		mutex_unlock(&hwpt->ioas->mutex);
+		rc = check_iopt_pages_preserved(session, hwpt);
+		if (rc)
+			goto err;
 	}
 
 	hwpt_ser->token = hwpt->liveupdate_token;
@@ -126,10 +125,16 @@ static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
 
 	rc = iommu_domain_preserve(hwpt->common.domain, &domain_ser);
 	if (rc < 0)
-		return rc;
+		goto err;
 
-	hwpt_ser->domain_data = __pa(domain_ser);
+	hwpt_ser->domain_data = virt_to_phys(domain_ser);
 	return 0;
+
+err:
+	if (ioas_made_immutable)
+		ioas_set_immutable(hwpt->ioas, false);
+
+	return rc;
 }
 
 static void _iommufd_unpreserve(struct iommufd_ctx *ictx,
@@ -147,19 +152,9 @@ static void _iommufd_unpreserve(struct iommufd_ctx *ictx,
 		if (!hwpt->liveupdate_preserved)
 			continue;
 
-		if (hwpt->ioas)
-			down_read(&hwpt->ioas->iopt.domains_rwsem);
 		iommu_domain_unpreserve(hwpt->common.domain);
-		if (hwpt->ioas)
-			up_read(&hwpt->ioas->iopt.domains_rwsem);
-
-		if (hwpt->ioas && hwpt->ioas->iopt.lu_map_immutable) {
-			down_write(&hwpt->ioas->iopt.domains_rwsem);
-			down_write(&hwpt->ioas->iopt.iova_rwsem);
-			hwpt->ioas->iopt.lu_map_immutable = false;
-			up_write(&hwpt->ioas->iopt.iova_rwsem);
-			up_write(&hwpt->ioas->iopt.domains_rwsem);
-		}
+		if (hwpt->ioas->iopt.lu_map_immutable)
+			ioas_set_immutable(hwpt->ioas, false);
 
 		hwpt->liveupdate_preserved = false;
 		iommufd_put_object(ictx, obj); /* Drop pin */
@@ -172,21 +167,21 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 {
 	struct iommufd_ctx *ictx = iommufd_ctx_from_file(args->file);
 	struct iommufd_hwpt_paging *hwpt;
-	struct iommufd_ser *iommufd_ser = NULL;
+	struct iommufd_ser *iommufd_ser;
 	struct iommufd_object *obj;
-	unsigned int nr_hwpts = 0;
+	unsigned int nr_hwpts;
 	unsigned long index;
-	size_t serial_size;
-	void *mem = NULL;
 	unsigned int i;
-	int rc = 0;
+	void *mem;
+	int rc;
 
 	if (IS_ERR(ictx))
 		return PTR_ERR(ictx);
 
 	mutex_lock(&ictx->liveupdate_mutex);
 
-	/* Pass 1: Count */
+	/* Count the number of HWPTs to preserve */
+	nr_hwpts = 0;
 	xa_lock(&ictx->objects);
 	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
 		if (obj->type != IOMMUFD_OBJ_HWPT_PAGING)
@@ -202,8 +197,8 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	}
 	xa_unlock(&ictx->objects);
 
-	serial_size = struct_size(iommufd_ser, hwpt_array, nr_hwpts);
-	mem = kho_alloc_preserve(serial_size);
+	mem = kho_alloc_preserve(struct_size(iommufd_ser,
+					     hwpt_array, nr_hwpts));
 	if (!mem) {
 		rc = -ENOMEM;
 		goto out_unlock;
@@ -212,7 +207,7 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	iommufd_ser = mem;
 	iommufd_ser->nr_hwpts = nr_hwpts;
 
-	/* Pass 2: Save */
+	/* Preserve HWPTs */
 	i = 0;
 	xa_lock(&ictx->objects);
 	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
