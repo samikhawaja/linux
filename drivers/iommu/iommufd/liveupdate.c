@@ -19,7 +19,8 @@ int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 	struct iommu_hwpt_liveupdate_mark_preserve *cmd = ucmd->cmd;
 	struct iommufd_hwpt_paging *hwpt_target;
 	struct iommufd_ctx *ictx = ucmd->ictx;
-	void *curr;
+	struct iommufd_object *obj;
+	unsigned long index;
 	int rc = 0;
 
 	hwpt_target = iommufd_get_hwpt_paging(ucmd, cmd->hwpt_id);
@@ -28,31 +29,24 @@ int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 
 	mutex_lock(&ictx->liveupdate_mutex);
 
-	/*
-	 * Use xa_cmpxchg to safely store only if the token is not already in
-	 * use.
-	 */
-	curr = xa_cmpxchg(&ictx->liveupdate_tokens, cmd->hwpt_token, NULL,
-			  hwpt_target, GFP_KERNEL);
-	if (xa_is_err(curr)) {
-		rc = xa_err(curr);
-		goto err;
-	} else if (curr) {
-		rc = -EADDRINUSE;
-		goto err;
+	xa_lock(&ictx->objects);
+	/* Collision check: token must be unique across all marked HWPTs */
+	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
+		if (WARN_ON_ONCE(obj->type != IOMMUFD_OBJ_HWPT_PAGING))
+			continue;
+
+		if (to_hwpt_paging(container_of(obj, struct iommufd_hw_pagetable, obj))->liveupdate_token == cmd->hwpt_token) {
+			rc = -EADDRINUSE;
+			xa_unlock(&ictx->objects);
+			goto out_unlock;
+		}
 	}
 
-	hwpt_target->liveupdate_preserve = true;
+	xa_set_mark(&ictx->objects, hwpt_target->common.obj.id, IOMMUFD_OBJ_LIVEUPDATE_MARK);
 	hwpt_target->liveupdate_token = cmd->hwpt_token;
+	xa_unlock(&ictx->objects);
 
-	mutex_unlock(&ictx->liveupdate_mutex);
-
-	/*
-	 * liveupdate_tokens xarray still holds a reference to the HWPT to make
-	 * sure it is not destroyed.
-	 */
-	return 0;
-err:
+out_unlock:
 	mutex_unlock(&ictx->liveupdate_mutex);
 	iommufd_put_object(ictx, &hwpt_target->common.obj);
 	return rc;
@@ -98,33 +92,33 @@ static int check_iopt_pages_preserved(struct liveupdate_session *s,
 }
 
 static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
-			     struct iommufd_hwpt_ser *hwpt_ser,
-			     struct iommufd_ioas **ioas_array,
-			     unsigned int *nr_visited_ioas,
-			     struct liveupdate_session *session)
+				 struct iommufd_hwpt_ser *hwpt_ser,
+				 struct liveupdate_session *session)
 {
 	struct iommu_domain_ser *domain_ser;
-	bool already_visited = false;
-	unsigned int j;
 	int rc;
 
 	if (hwpt->ioas) {
-		for (j = 0; j < *nr_visited_ioas; j++) {
-			if (ioas_array[j] == hwpt->ioas) {
-				already_visited = true;
-				break;
+		mutex_lock(&hwpt->ioas->mutex);
+		if (!hwpt->ioas->iopt.lu_map_immutable) {
+			down_write(&hwpt->ioas->iopt.domains_rwsem);
+			down_write(&hwpt->ioas->iopt.iova_rwsem);
+			hwpt->ioas->iopt.lu_map_immutable = true;
+			up_write(&hwpt->ioas->iopt.iova_rwsem);
+			up_write(&hwpt->ioas->iopt.domains_rwsem);
+
+			rc = check_iopt_pages_preserved(session, hwpt);
+			if (rc) {
+				down_write(&hwpt->ioas->iopt.domains_rwsem);
+				down_write(&hwpt->ioas->iopt.iova_rwsem);
+				hwpt->ioas->iopt.lu_map_immutable = false;
+				up_write(&hwpt->ioas->iopt.iova_rwsem);
+				up_write(&hwpt->ioas->iopt.domains_rwsem);
+				mutex_unlock(&hwpt->ioas->mutex);
+				return rc;
 			}
 		}
-
-		if (!already_visited) {
-			mutex_lock(&hwpt->ioas->mutex);
-			rc = check_iopt_pages_preserved(session, hwpt);
-			mutex_unlock(&hwpt->ioas->mutex);
-			if (rc)
-				return rc;
-
-			ioas_array[(*nr_visited_ioas)++] = hwpt->ioas;
-		}
+		mutex_unlock(&hwpt->ioas->mutex);
 	}
 
 	hwpt_ser->token = hwpt->liveupdate_token;
@@ -138,13 +132,48 @@ static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
 	return 0;
 }
 
+static void _iommufd_unpreserve(struct iommufd_ctx *ictx,
+				struct iommufd_ser *ser)
+{
+	struct iommufd_hwpt_paging *hwpt;
+	struct iommufd_object *obj;
+	unsigned long index;
+
+	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
+		if (obj->type != IOMMUFD_OBJ_HWPT_PAGING)
+			continue;
+
+		hwpt = to_hwpt_paging(container_of(obj, struct iommufd_hw_pagetable, obj));
+		if (!hwpt->liveupdate_preserved)
+			continue;
+
+		if (hwpt->ioas)
+			down_read(&hwpt->ioas->iopt.domains_rwsem);
+		iommu_domain_unpreserve(hwpt->common.domain);
+		if (hwpt->ioas)
+			up_read(&hwpt->ioas->iopt.domains_rwsem);
+
+		if (hwpt->ioas && hwpt->ioas->iopt.lu_map_immutable) {
+			down_write(&hwpt->ioas->iopt.domains_rwsem);
+			down_write(&hwpt->ioas->iopt.iova_rwsem);
+			hwpt->ioas->iopt.lu_map_immutable = false;
+			up_write(&hwpt->ioas->iopt.iova_rwsem);
+			up_write(&hwpt->ioas->iopt.domains_rwsem);
+		}
+
+		hwpt->liveupdate_preserved = false;
+		iommufd_put_object(ictx, obj); /* Drop pin */
+	}
+
+	kho_unpreserve_free(ser);
+}
+
 static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 {
 	struct iommufd_ctx *ictx = iommufd_ctx_from_file(args->file);
-	struct iommufd_hwpt_paging *hwpt, **hwpt_array = NULL;
-	struct iommufd_ioas **ioas_array = NULL;
+	struct iommufd_hwpt_paging *hwpt;
 	struct iommufd_ser *iommufd_ser = NULL;
-	unsigned int nr_visited_ioas = 0;
+	struct iommufd_object *obj;
 	unsigned int nr_hwpts = 0;
 	unsigned long index;
 	size_t serial_size;
@@ -158,13 +187,20 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	mutex_lock(&ictx->liveupdate_mutex);
 
 	/* Pass 1: Count */
-	xa_for_each(&ictx->liveupdate_tokens, index, hwpt) {
+	xa_lock(&ictx->objects);
+	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
+		if (obj->type != IOMMUFD_OBJ_HWPT_PAGING)
+			continue;
+
+		hwpt = to_hwpt_paging(container_of(obj, struct iommufd_hw_pagetable, obj));
 		if (!hwpt->common.domain) {
 			rc = -EINVAL;
+			xa_unlock(&ictx->objects);
 			goto out_unlock;
 		}
 		nr_hwpts++;
 	}
+	xa_unlock(&ictx->objects);
 
 	serial_size = struct_size(iommufd_ser, hwpt_array, nr_hwpts);
 	mem = kho_alloc_preserve(serial_size);
@@ -176,55 +212,44 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	iommufd_ser = mem;
 	iommufd_ser->nr_hwpts = nr_hwpts;
 
-	hwpt_array = kcalloc(nr_hwpts, sizeof(*hwpt_array), GFP_KERNEL);
-	ioas_array = kcalloc(nr_hwpts, sizeof(*ioas_array), GFP_KERNEL);
-	if (!hwpt_array || !ioas_array) {
-		rc = -ENOMEM;
-		goto out_free_mem;
-	}
-
-	/* Pass 2: Gather */
+	/* Pass 2: Save */
 	i = 0;
-	xa_for_each(&ictx->liveupdate_tokens, index, hwpt)
-		hwpt_array[i++] = hwpt;
+	xa_lock(&ictx->objects);
+	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
+		if (obj->type != IOMMUFD_OBJ_HWPT_PAGING)
+			continue;
 
-	/* Pass 3: Save */
-	for (i = 0; i < nr_hwpts; i++) {
-		rc = iommufd_preserve_hwpt(hwpt_array[i],
-					   &iommufd_ser->hwpt_array[i],
-					   ioas_array, &nr_visited_ioas,
-					   args->session);
-		if (rc)
-			goto out_unpreserve_hwpts;
+		if (!refcount_inc_not_zero(&obj->users)) {
+			rc = -ENOENT;
+			xa_unlock(&ictx->objects);
+			goto out_unpreserve;
+		}
+
+		/*
+		 * HWPT is refcounted so it will not be destroyed. The xarray
+		 * lock can be released here before preserving the HWPT.
+		 */
+		xa_unlock(&ictx->objects);
+		hwpt = to_hwpt_paging(container_of(obj, struct iommufd_hw_pagetable, obj));
+		rc = iommufd_preserve_hwpt(hwpt, &iommufd_ser->hwpt_array[i++], args->session);
+		if (rc) {
+			iommufd_put_object(ictx, obj);
+			goto out_unpreserve;
+		}
+
+		/* Mark as preserved and pinned */
+		hwpt->liveupdate_preserved = true;
+		xa_lock(&ictx->objects);
 	}
+	xa_unlock(&ictx->objects);
 
 	args->serialized_data = virt_to_phys(iommufd_ser);
-	kfree(hwpt_array);
-	kfree(ioas_array);
 	mutex_unlock(&ictx->liveupdate_mutex);
 	iommufd_ctx_put(ictx);
 	return 0;
 
-out_unpreserve_hwpts:
-	for (; i >= 0; i--) {
-		/* TODO: Need to take domain rwsem here before doing unpreserve. */
-		iommu_domain_unpreserve(hwpt_array[i]->common.domain);
-	}
-
-	i = nr_visited_ioas;
-	for (; i >= 0; i--) {
-		down_read(&hwpt->ioas->iopt.iova_rwsem);
-		/*TODO: Need to take domain rwsem also to make sure there are no
-		 * ongoing mappings. */
-		//ioas_array[i]->iopt. make immutable here.
-		up_read(&hwpt->ioas->iopt.iova_rwsem);
-	}
-
-out_free_mem:
-	if (mem)
-		kho_unpreserve_free(mem);
-	kfree(hwpt_array);
-	kfree(ioas_array);
+out_unpreserve:
+	_iommufd_unpreserve(ictx, iommufd_ser);
 out_unlock:
 	mutex_unlock(&ictx->liveupdate_mutex);
 	iommufd_ctx_put(ictx);
@@ -234,77 +259,13 @@ out_unlock:
 static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 {
 	struct iommufd_ctx *ictx = iommufd_ctx_from_file(args->file);
-	struct iommufd_hwpt_paging *hwpt, **hwpt_array = NULL;
-	struct iommufd_ioas **ioas_array = NULL;
-	unsigned int nr_visited_ioas = 0;
-	unsigned int nr_hwpts = 0;
-	unsigned long index;
-	bool already_visited;
-	unsigned int i, j;
 
 	if (WARN_ON(IS_ERR(ictx)))
 		return;
 
 	mutex_lock(&ictx->liveupdate_mutex);
-	xa_for_each(&ictx->liveupdate_tokens, index, hwpt)
-		nr_hwpts++;
-
-	if (!nr_hwpts)
-		goto out_unlock;
-
-	hwpt_array = kcalloc(nr_hwpts, sizeof(*hwpt_array), GFP_KERNEL);
-	ioas_array = kcalloc(nr_hwpts, sizeof(*ioas_array), GFP_KERNEL);
-	if (WARN_ON(!hwpt_array || !ioas_array))
-		goto out_free;
-
-	i = 0;
-	xa_for_each(&ictx->liveupdate_tokens, index, hwpt)
-		hwpt_array[i++] = hwpt;
-
-	for (i = 0; i < nr_hwpts; i++) {
-		hwpt = hwpt_array[i];
-		already_visited = false;
-
-		if (hwpt->ioas) {
-			for (j = 0; j < nr_visited_ioas; j++) {
-				if (ioas_array[j] == hwpt->ioas) {
-					already_visited = true;
-					break;
-				}
-			}
-
-			if (!already_visited)
-				ioas_array[nr_visited_ioas++] = hwpt->ioas;
-		}
-
-		if (hwpt->common.domain) {
-			if (hwpt->ioas)
-				down_read(&hwpt->ioas->iopt.domains_rwsem);
-
-			iommu_domain_unpreserve(hwpt->common.domain);
-
-			if (hwpt->ioas)
-				up_read(&hwpt->ioas->iopt.domains_rwsem);
-		}
-	}
-
-	for (j = 0; j < nr_visited_ioas; j++) {
-		struct iommufd_ioas *ioas = ioas_array[j];
-
-		down_write(&ioas->iopt.domains_rwsem);
-		down_write(&ioas->iopt.iova_rwsem);
-		ioas->iopt.lu_map_immutable = false;
-		up_write(&ioas->iopt.iova_rwsem);
-		up_write(&ioas->iopt.domains_rwsem);
-	}
-
-out_free:
-	kfree(hwpt_array);
-	kfree(ioas_array);
-out_unlock:
+	_iommufd_unpreserve(ictx, phys_to_virt(args->serialized_data));
 	mutex_unlock(&ictx->liveupdate_mutex);
-
-	kho_unpreserve_free(phys_to_virt(args->serialized_data));
 
 	iommufd_ctx_put(ictx);
 }
