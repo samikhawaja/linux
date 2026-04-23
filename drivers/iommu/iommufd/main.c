@@ -782,11 +782,9 @@ static int __init iommufd_init(void)
 			goto err_misc;
 	}
 
-	if (IS_ENABLED(CONFIG_IOMMU_LIVEUPDATE)) {
-		ret = iommufd_liveupdate_register();
-		if (ret)
-			goto err_vfio_misc;
-	}
+	ret = iommufd_liveupdate_register();
+	if (ret)
+		goto err_vfio_misc;
 
 	ret = iommufd_test_init();
 	if (ret)
@@ -794,8 +792,7 @@ static int __init iommufd_init(void)
 	return 0;
 
 err_liveupdate:
-	if (IS_ENABLED(CONFIG_IOMMU_LIVEUPDATE))
-		iommufd_liveupdate_unregister();
+	iommufd_liveupdate_unregister();
 err_vfio_misc:
 	if (IS_ENABLED(CONFIG_IOMMUFD_VFIO_CONTAINER))
 		misc_deregister(&vfio_misc_dev);
@@ -807,8 +804,7 @@ err_misc:
 static void __exit iommufd_exit(void)
 {
 	iommufd_test_exit();
-	if (IS_ENABLED(CONFIG_IOMMU_LIVEUPDATE))
-		iommufd_liveupdate_unregister();
+	iommufd_liveupdate_unregister();
 	if (IS_ENABLED(CONFIG_IOMMUFD_VFIO_CONTAINER))
 		misc_deregister(&vfio_misc_dev);
 	misc_deregister(&iommu_misc_dev);

@@ -384,7 +384,7 @@ int iopt_map_pages(struct io_pagetable *iopt, struct list_head *pages_list,
 		return rc;
 
 	down_read(&iopt->domains_rwsem);
-	if (iopt_liveupdate_map_immutable(iopt)) {
+	if (iopt_liveupdate_immutable(iopt)) {
 		rc = -EBUSY;
 		goto out_unlock_domains;
 	}
@@ -761,7 +761,7 @@ again:
 	down_read(&iopt->domains_rwsem);
 	down_write(&iopt->iova_rwsem);
 
-	if (iopt_liveupdate_map_immutable(iopt)) {
+	if (iopt_liveupdate_immutable(iopt)) {
 		rc = -EBUSY;
 		goto out_unlock_iova;
 	}

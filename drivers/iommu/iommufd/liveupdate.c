@@ -17,7 +17,7 @@
 static void ioas_set_immutable(struct iommufd_ioas *ioas, bool immutable)
 {
 	down_write(&ioas->iopt.domains_rwsem);
-	ioas->iopt.lu_map_immutable = immutable;
+	ioas->iopt.liveupdate_immutable = immutable;
 	up_write(&ioas->iopt.domains_rwsem);
 }
 
@@ -105,7 +105,7 @@ static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
 	bool ioas_made_immutable = false;
 	int rc;
 
-	if (!hwpt->ioas->iopt.lu_map_immutable) {
+	if (!hwpt->ioas->iopt.liveupdate_immutable) {
 		/*
 		 * Make IOAS immutable so the DMA mappings do not change while
 		 * the HWPT is preserved. Since one IOAS can have multiple
@@ -153,7 +153,7 @@ static void _iommufd_unpreserve(struct iommufd_ctx *ictx,
 			continue;
 
 		iommu_domain_unpreserve(hwpt->common.domain);
-		if (hwpt->ioas->iopt.lu_map_immutable)
+		if (hwpt->ioas->iopt.liveupdate_immutable)
 			ioas_set_immutable(hwpt->ioas, false);
 
 		hwpt->liveupdate_preserved = false;
@@ -232,7 +232,7 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 			goto out_unpreserve;
 		}
 
-		/* Mark as preserved and pinned */
+		/* Mark as preserved */
 		hwpt->liveupdate_preserved = true;
 		xa_lock(&ictx->objects);
 	}
