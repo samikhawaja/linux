@@ -8,6 +8,8 @@
 #include <linux/export.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/dma_alloc.h>
+#include <kunit/static_stub.h>
+#include <kunit/visibility.h>
 #include <linux/mm.h>
 #include <linux/dma-map-ops.h>
 #include <linux/scatterlist.h>
@@ -310,6 +312,57 @@ out_leak_pages:
 }
 
 #ifdef CONFIG_DMA_LIVEUPDATE
+/* KUnit Mocking Wrappers Prototypes */
+VISIBLE_IF_KUNIT void *dma_kho_alloc_preserve(size_t size);
+VISIBLE_IF_KUNIT int dma_kho_preserve_folio(struct folio *folio);
+VISIBLE_IF_KUNIT void dma_kho_unpreserve_folio(struct folio *folio);
+VISIBLE_IF_KUNIT void dma_kho_unpreserve_free(void *ptr);
+VISIBLE_IF_KUNIT struct folio *dma_kho_restore_folio(phys_addr_t phys);
+VISIBLE_IF_KUNIT void dma_kho_restore_free(void *ptr);
+
+/* KUnit Mocking Wrappers */
+VISIBLE_IF_KUNIT void *dma_kho_alloc_preserve(size_t size)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_alloc_preserve, size);
+	return kho_alloc_preserve(size);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_alloc_preserve);
+
+VISIBLE_IF_KUNIT int dma_kho_preserve_folio(struct folio *folio)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_preserve_folio, folio);
+	return kho_preserve_folio(folio);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_preserve_folio);
+
+VISIBLE_IF_KUNIT void dma_kho_unpreserve_folio(struct folio *folio)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_unpreserve_folio, folio);
+	kho_unpreserve_folio(folio);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_unpreserve_folio);
+
+VISIBLE_IF_KUNIT void dma_kho_unpreserve_free(void *ptr)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_unpreserve_free, ptr);
+	kho_unpreserve_free(ptr);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_unpreserve_free);
+
+VISIBLE_IF_KUNIT struct folio *dma_kho_restore_folio(phys_addr_t phys)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_restore_folio, phys);
+	return kho_restore_folio(phys);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_restore_folio);
+
+VISIBLE_IF_KUNIT void dma_kho_restore_free(void *ptr)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_restore_free, ptr);
+	kho_restore_free(ptr);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_restore_free);
+
 int dma_direct_preserve_allocation(struct device *dev, void *cpu_addr,
 				   size_t size, dma_addr_t dma_handle,
 				   unsigned long attrs, u64 *state)
@@ -337,7 +390,7 @@ int dma_direct_preserve_allocation(struct device *dev, void *cpu_addr,
 	    dma_is_from_pool(dev, cpu_addr, PAGE_ALIGN(size)))
 		return -EOPNOTSUPP;
 
-	ser = kho_alloc_preserve(sizeof(*ser));
+	ser = dma_kho_alloc_preserve(sizeof(*ser));
 	if (!ser)
 		return -ENOMEM;
 
@@ -345,9 +398,9 @@ int dma_direct_preserve_allocation(struct device *dev, void *cpu_addr,
 	ser->force_decrypted = force_dma_unencrypted(dev);
 	ser->size = size;
 
-	ret = kho_preserve_folio(page_folio(phys_to_page(ser->page_phys)));
+	ret = dma_kho_preserve_folio(page_folio(phys_to_page(ser->page_phys)));
 	if (ret) {
-		kho_unpreserve_free(ser);
+		dma_kho_unpreserve_free(ser);
 		return ret;
 	}
 
@@ -360,8 +413,8 @@ void dma_direct_unpreserve_allocation(struct device *dev, u64 state)
 	struct dma_alloc_ser *ser;
 
 	ser = phys_to_virt(state);
-	kho_unpreserve_folio(page_folio(phys_to_page(ser->page_phys)));
-	kho_unpreserve_free(ser);
+	dma_kho_unpreserve_folio(page_folio(phys_to_page(ser->page_phys)));
+	dma_kho_unpreserve_free(ser);
 }
 
 void *dma_direct_restore_allocation(struct device *dev, size_t size,
@@ -447,8 +500,8 @@ void *dma_direct_restore_allocation(struct device *dev, size_t size,
 	}
 
 	*dma_handle = phys_to_dma_direct(dev, ser->page_phys);
-	WARN_ON(!kho_restore_folio(ser->page_phys));
-	kho_restore_free(ser);
+	WARN_ON(!dma_kho_restore_folio(ser->page_phys));
+	dma_kho_restore_free(ser);
 	return cpu_addr;
 }
 #endif
