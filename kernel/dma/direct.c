@@ -8,6 +8,8 @@
 #include <linux/export.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/dma_alloc.h>
+#include <kunit/static_stub.h>
+#include <kunit/visibility.h>
 #include <linux/mm.h>
 #include <linux/dma-map-ops.h>
 #include <linux/scatterlist.h>
@@ -310,6 +312,57 @@ out_leak_pages:
 }
 
 #ifdef CONFIG_DMA_LIVEUPDATE
+/* KUnit Mocking Wrappers Prototypes */
+VISIBLE_IF_KUNIT void *dma_kho_alloc_preserve(size_t size);
+VISIBLE_IF_KUNIT int dma_kho_preserve_pages(struct page *page, unsigned long nr_pages);
+VISIBLE_IF_KUNIT void dma_kho_unpreserve_pages(struct page *page, unsigned long nr_pages);
+VISIBLE_IF_KUNIT void dma_kho_unpreserve_free(void *ptr);
+VISIBLE_IF_KUNIT struct page *dma_kho_restore_pages(phys_addr_t phys, unsigned long nr_pages);
+VISIBLE_IF_KUNIT void dma_kho_restore_free(void *ptr);
+
+/* KUnit Mocking Wrappers */
+VISIBLE_IF_KUNIT void *dma_kho_alloc_preserve(size_t size)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_alloc_preserve, size);
+	return kho_alloc_preserve(size);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_alloc_preserve);
+
+VISIBLE_IF_KUNIT int dma_kho_preserve_pages(struct page *page, unsigned long nr_pages)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_preserve_pages, page, nr_pages);
+	return kho_preserve_pages(page, nr_pages);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_preserve_pages);
+
+VISIBLE_IF_KUNIT void dma_kho_unpreserve_pages(struct page *page, unsigned long nr_pages)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_unpreserve_pages, page, nr_pages);
+	kho_unpreserve_pages(page, nr_pages);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_unpreserve_pages);
+
+VISIBLE_IF_KUNIT void dma_kho_unpreserve_free(void *ptr)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_unpreserve_free, ptr);
+	kho_unpreserve_free(ptr);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_unpreserve_free);
+
+VISIBLE_IF_KUNIT struct page *dma_kho_restore_pages(phys_addr_t phys, unsigned long nr_pages)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_restore_pages, phys, nr_pages);
+	return kho_restore_pages(phys, nr_pages);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_restore_pages);
+
+VISIBLE_IF_KUNIT void dma_kho_restore_free(void *ptr)
+{
+	KUNIT_STATIC_STUB_REDIRECT(dma_kho_restore_free, ptr);
+	kho_restore_free(ptr);
+}
+EXPORT_SYMBOL_IF_KUNIT(dma_kho_restore_free);
+
 int dma_direct_preserve_allocation(struct device *dev, void *cpu_addr,
 				   size_t size, dma_addr_t dma_handle,
 				   unsigned long attrs, u64 *state)
@@ -340,7 +393,7 @@ int dma_direct_preserve_allocation(struct device *dev, void *cpu_addr,
 	    dma_is_from_pool(dev, cpu_addr, PAGE_ALIGN(size)))
 		return -EOPNOTSUPP;
 
-	ser = kho_alloc_preserve(sizeof(*ser));
+	ser = dma_kho_alloc_preserve(sizeof(*ser));
 	if (IS_ERR(ser))
 		return PTR_ERR(ser);
 
@@ -348,10 +401,10 @@ int dma_direct_preserve_allocation(struct device *dev, void *cpu_addr,
 	ser->force_decrypted = force_dma_unencrypted(dev);
 	ser->size = size;
 
-	ret = kho_preserve_pages(phys_to_page(ser->page_phys),
-				 size >> PAGE_SHIFT);
+	ret = dma_kho_preserve_pages(phys_to_page(ser->page_phys),
+				     size >> PAGE_SHIFT);
 	if (ret) {
-		kho_unpreserve_free(ser);
+		dma_kho_unpreserve_free(ser);
 		return ret;
 	}
 
@@ -367,9 +420,9 @@ void dma_direct_unpreserve_allocation(struct device *dev, u64 state)
 		return;
 
 	ser = phys_to_virt(state);
-	kho_unpreserve_pages(phys_to_page(ser->page_phys),
-			     ser->size >> PAGE_SHIFT);
-	kho_unpreserve_free(ser);
+	dma_kho_unpreserve_pages(phys_to_page(ser->page_phys),
+				 ser->size >> PAGE_SHIFT);
+	dma_kho_unpreserve_free(ser);
 }
 
 void *dma_direct_restore_allocation(struct device *dev, size_t size,
@@ -463,9 +516,9 @@ void *dma_direct_restore_allocation(struct device *dev, size_t size,
 	 * Cannot free the restored pages on error here as these might be in use
 	 * by a device with direct allocation in the previous kernel.
 	 */
-	WARN_ON(!kho_restore_pages(ser->page_phys,
-				   ser->size >> PAGE_SHIFT));
-	kho_restore_free(ser);
+	WARN_ON(!dma_kho_restore_pages(ser->page_phys,
+				       ser->size >> PAGE_SHIFT));
+	dma_kho_restore_free(ser);
 	return cpu_addr;
 }
 #endif
