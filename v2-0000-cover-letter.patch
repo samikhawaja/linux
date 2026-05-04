@@ -1,59 +1,189 @@
-From ca39e459fafdf2982566f6f33f35f4378a49cd07 Mon Sep 17 00:00:00 2001
+From a1a1baf15f368d71c5fc0f9303566870bf5388d2 Mon Sep 17 00:00:00 2001
 From: Samiullah Khawaja <skhawaja@google.com>
-Date: Thu, 21 May 2026 19:27:33 +0000
-Subject: [PATCH v2 0/3] kho: Add support for kunit mocking KHO restore API
+Date: Wed, 8 Jul 2026 20:30:57 +0000
+Subject: [RFC PATCH v2 00/10] dma-mapping: Add preservation of direct allocations
 
-To write kunit tests for preservation and restoration of liveupdate
-state in various subsystems without triggering the actual kexec, the KHO
-restore API needs to be mocked by the test writer. The mocking is done
-to allow testing of the individual components or functions in isolation.
+This is an RFC v2 to discuss the preservation of DMA allocations for
+devices that are using direct allocation mode. Note preservation here
+means preservation of physical memory using KHO only. IOVAs and IOMMU
+mappings are out of scope.
 
-The patch series adds the following to support kunit testing when using the KHO
-API:
+The complexity and need of this was discussed in the thread mentioned
+below. It was proposed to allow preservation of only a subset of
+allocations with minimum support.
 
-- Add static stub hooks to mock the KHO restore API so the restore path
-  can be tested without triggering kexec.
-- Add helper function that can be used by the test writer to check if
-  memory is preserved in KHO tree.
+https://lore.kernel.org/all/aepfYzkI7NsVGCF0@google.com/
+https://lore.kernel.org/all/aepRy7Gp7Ng85Zr7@willie-the-truck/
 
-Finally, it adds a KUnit test for the KHO API that verifies the allocation of
-preserved memory, and the preservation/restoration of pages and folios.
+Note DMA allocation allows memory allocation from various allocators in
+various configurations. This RFC supports preservation with,
 
-KHO Kunit test run:
+- Direct Allocation Only.
+- Pages allocated through alloc_page (Buddy allocator).
+- No CMA support.
+- No DMA pools.
+- No device coherent memory regions.
 
- KTAP version 1
- 1..1
-     KTAP version 1
-     # Subtest: kho_test
-     # module: kexec_handover_test
-     1..3
-     ok 1 kho_test_alloc_preserve
-     ok 2 kho_test_preserve_pages
-     ok 3 kho_test_preserve_folio
- # kho_test: pass:3 fail:0 skip:0 total:3
- # Totals: pass:3 fail:0 skip:0 total:3
- ok 1 kho_test
+Note that this series does not include/use the page-split and page
+refcount fixes during KHO restore, that are in review here:
+https://lore.kernel.org/all/20260703020832.1731864-1-praan@google.com/
 
-v2:
- - Move kunit header includes above linux header includes.
- - Use the __kho_preserve_pages_order() to get the order of preserved
-   pages instead of open order calculation math.
+The changes are also pushed here:
+https://github.com/samikhawaja/linux/tree/dma-alloc-preserve-direct-v2
 
-Samiullah Khawaja (3):
-  kho: Add kunit static stubs
-  kho: Add helper function to check if pages are preserved
-  kho: Add kunit test to verify preserve/restore pages and folio
+Testing:
 
- include/linux/kexec_handover.h          |   5 +
- kernel/liveupdate/Kconfig               |  10 ++
- kernel/liveupdate/Makefile              |   1 +
- kernel/liveupdate/kexec_handover.c      |  63 +++++++++++-
- kernel/liveupdate/kexec_handover_test.c | 131 ++++++++++++++++++++++++
- 5 files changed, 209 insertions(+), 1 deletion(-)
- create mode 100644 kernel/liveupdate/kexec_handover_test.c
+This patch series includes a Kunit test, for testing dma allocation
+preservation, by using the KHO stubs added in a separate patch series:
+https://lore.kernel.org/all/20260521193202.746810-1-skhawaja@google.com/
 
+The following test runs are executed in qemu.
+
+Run on x86:
+
+   KTAP version 1
+   1..1
+       KTAP version 1
+       # Subtest: dma_direct_liveupdate
+       # module: direct_test
+       1..5
+           KTAP version 1
+           # Subtest: test_dma_direct_coherent
+           ok 1 size=128
+           ok 2 size=4096
+           ok 3 size=8192
+           ok 4 size=12288
+           ok 5 size=32768
+       # test_dma_direct_coherent: pass:5 fail:0 skip:0 total:5
+       ok 1 test_dma_direct_coherent
+           KTAP version 1
+           # Subtest: test_dma_direct_non_coherent
+           ok 1 size=128
+           ok 2 size=4096
+           ok 3 size=8192
+           ok 4 size=12288
+           ok 5 size=32768
+       # test_dma_direct_non_coherent: pass:5 fail:0 skip:0 total:5
+       ok 2 test_dma_direct_non_coherent
+           KTAP version 1
+           # Subtest: test_dma_direct_coherent_atomic
+           ok 1 size=128
+           ok 2 size=4096
+           ok 3 size=8192
+           ok 4 size=12288
+           ok 5 size=32768
+       # test_dma_direct_coherent_atomic: pass:5 fail:0 skip:0 total:5
+       ok 3 test_dma_direct_coherent_atomic
+           KTAP version 1
+           # Subtest: test_dma_direct_non_coherent_atomic
+           ok 1 size=128
+           ok 2 size=4096
+           ok 3 size=8192
+           ok 4 size=12288
+           ok 5 size=32768
+       # test_dma_direct_non_coherent_atomic: pass:5 fail:0 skip:0 total:5
+       ok 4 test_dma_direct_non_coherent_atomic
+       ok 5 test_dmam_preservation
+   # dma_direct_liveupdate: pass:5 fail:0 skip:0 total:5
+   # Totals: pass:21 fail:0 skip:0 total:21
+   ok 1 dma_direct_liveupdate
+
+Run on arm64:
+
+   KTAP version 1
+   1..1
+       KTAP version 1
+       # Subtest: dma_direct_liveupdate
+       # module: direct_test
+       1..5
+           KTAP version 1
+           # Subtest: test_dma_direct_coherent
+           ok 1 size=128
+           ok 2 size=4096
+           ok 3 size=8192
+           ok 4 size=12288
+           ok 5 size=32768
+       # test_dma_direct_coherent: pass:5 fail:0 skip:0 total:5
+       ok 1 test_dma_direct_coherent
+           KTAP version 1
+           # Subtest: test_dma_direct_non_coherent
+           ok 1 size=128
+           ok 2 size=4096
+           ok 3 size=8192
+           ok 4 size=12288
+           ok 5 size=32768
+       # test_dma_direct_non_coherent: pass:5 fail:0 skip:0 total:5
+       ok 2 test_dma_direct_non_coherent
+           KTAP version 1
+           # Subtest: test_dma_direct_coherent_atomic
+           ok 1 size=128
+           ok 2 size=4096
+           ok 3 size=8192
+           ok 4 size=12288
+           ok 5 size=32768
+       # test_dma_direct_coherent_atomic: pass:5 fail:0 skip:0 total:5
+       ok 3 test_dma_direct_coherent_atomic
+           KTAP version 1
+           # Subtest: test_dma_direct_non_coherent_atomic
+       # test_dma_direct_non_coherent_atomic: DMA allocation using pool, expecting -EOPNOTSUPP
+           ok 1 size=128
+       # test_dma_direct_non_coherent_atomic: DMA allocation using pool, expecting -EOPNOTSUPP
+           ok 2 size=4096
+       # test_dma_direct_non_coherent_atomic: DMA allocation using pool, expecting -EOPNOTSUPP
+           ok 3 size=8192
+       # test_dma_direct_non_coherent_atomic: DMA allocation using pool, expecting -EOPNOTSUPP
+           ok 4 size=12288
+       # test_dma_direct_non_coherent_atomic: DMA allocation using pool, expecting -EOPNOTSUPP
+           ok 5 size=32768
+       # test_dma_direct_non_coherent_atomic: pass:5 fail:0 skip:0 total:5
+       ok 4 test_dma_direct_non_coherent_atomic
+       ok 5 test_dmam_preservation
+   # dma_direct_liveupdate: pass:5 fail:0 skip:0 total:5
+   # Totals: pass:21 fail:0 skip:0 total:21
+   ok 1 dma_direct_liveupdate
+
+Looking forward to your feedback on this.
+
+Thanks
+
+Changelog:
+
+rfc v2:
+
+  - Add dma_is_from_cma() to check if an allocation is from CMA.
+  - Add dma_is_from_dev_coherent() to check if an allocation is from a device coherent region.
+  - Add support for preserving device-managed DMA allocations (dmam_alloc_*).
+  - Add KUnit test suite for dma-direct liveupdate preservation.
+
+Samiullah Khawaja (10):
+  dma: Add DMA allocation preservation KHO ABI
+  dma/pool: Add an API to check if DMA allocation is from pool
+  dma: contiguous: Add API to check if an allocation is from CMA
+  dma-coherent: Allow checking if allocation is from dev coherent region
+  dma-direct: Add API to preserve/restore allocations
+  dma-mapping: Add API to preserve/restore DMA allocation
+  dma-mapping: Add support of preserving dmam allocations
+  dma: contiguous: Export is_from_cma helper for kunit
+  dma: pool: Export the is_from_pool helper for kunit
+  dma-direct: Add KUnit test for liveupdate preservation
+
+ include/linux/dma-direct.h        |  29 +++++
+ include/linux/dma-map-ops.h       |   9 ++
+ include/linux/dma-mapping.h       |  99 +++++++++++++++
+ include/linux/kho/abi/dma_alloc.h |  32 +++++
+ kernel/dma/Kconfig                |  12 ++
+ kernel/dma/Makefile               |   1 +
+ kernel/dma/coherent.c             |  11 ++
+ kernel/dma/contiguous.c           |  27 ++++
+ kernel/dma/direct.c               | 171 +++++++++++++++++++++++++
+ kernel/dma/direct_test.c          | 200 ++++++++++++++++++++++++++++++
+ kernel/dma/mapping.c              | 130 +++++++++++++++++++
+ kernel/dma/pool.c                 |  17 +++
+ 12 files changed, 738 insertions(+)
+ create mode 100644 include/linux/kho/abi/dma_alloc.h
+ create mode 100644 kernel/dma/direct_test.c
 
 base-commit: ec4084bc445027a52f600e30a976928be1ba1950
 -- 
-2.54.0.746.g67dd491aae-goog
+2.55.0.795.g602f6c329a-goog
 
