@@ -1,0 +1,52 @@
+From 1a59ac4ec8be9f3e283fd2779c3227868bcfac62 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Mon, 4 May 2026 23:40:44 +0000
+Subject: [RFC PATCH 0/4] dma: Add preservation of direct allocations
+
+This is an RFC to discuss the preservation of DMA allocations for
+devices that are using direct allocation mode. Note preservation here
+means preservation of physical memory only using KHO. IOVAs and IOMMU
+mappings are out of scope.
+
+The complexity and need of this was discussed in the thread mentioned
+below. It was proposed to allow preservation of only a subset of
+allocations with minimum support.
+
+https://lore.kernel.org/all/aepfYzkI7NsVGCF0@google.com/
+https://lore.kernel.org/all/aepRy7Gp7Ng85Zr7@willie-the-truck/
+
+Note DMA allocation allows allocation from various allocators in various
+configurations. This RFC supports preservation with,
+
+- Direct Allocation Only.
+- Pages allocated through alloc_page.
+- No CMA support.
+- No DMA allocators.
+
+Looking forward to your feedback on this.
+
+Thanks
+
+Samiullah Khawaja (4):
+  dma: Add DMA allocation preservation KHO ABI
+  dma/pool: Add an API to check if DMA allocation is from pool
+  dma-direct: Add API to preserve/restore allocations
+  dma-mapping: Add API to preserve/restore DMA allocation
+
+ include/linux/dma-direct.h        |  29 ++++++
+ include/linux/dma-map-ops.h       |   1 +
+ include/linux/dma-mapping.h       |  50 +++++++++
+ include/linux/kho/abi/dma_alloc.h |  30 ++++++
+ kernel/dma/Kconfig                |   3 +
+ kernel/dma/direct.c               | 163 ++++++++++++++++++++++++++++++
+ kernel/dma/mapping.c              |  52 ++++++++++
+ kernel/dma/pool.c                 |  13 +++
+ 8 files changed, 341 insertions(+)
+ create mode 100644 include/linux/kho/abi/dma_alloc.h
+
+
+base-commit: 9974969c14031a097d6b45bcb7a06bb4aa525c40
+prerequisite-patch-id: 41f13f37cb3b439f17dfa4e3f2d5c767aaef0346
+-- 
+2.54.0.545.g6539524ca2-goog
+
