@@ -1,0 +1,81 @@
+From 5a79e38132b31229f18aaa12070eecff8b70e535 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Tue, 5 May 2026 22:10:18 +0000
+Subject: [PATCH 0/2] vfio: selftests: Add iommufd multi iommu test
+
+IOMMUFD allows creating IOAS and the underlying HWPTs using already open
+iommufd. Currently the VFIO selftest framework only allows user to
+create one iommu against an iommufd.
+
+This series adds new functionality to allow,
+
+- Creating an IOMMU against an already open iommufd.
+  - The new IOMMU basically uses a new iommufd IOAS.
+  - The user has option to create a new HWPT when creating the new IOMMU
+    instead of using automatically created HWPT internally.
+- Attaching the new iommufd IOMMU with a device that was setup using a
+  different IOMMU.
+
+This series also adds a new test that creates multiple iommus and
+switches between them and does DMA to verify that everything works
+properly.
+
+This was tested in Qemu with a virtio-pci device and also on an Intel
+machine with Intel DSA device.
+
+ TAP version 13
+ 1..9
+ # Starting 9 tests from 9 test cases.
+ #  RUN           vfio_iommufd_multi_iommu_test.DEFAULT_to_DEFAULT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.DEFAULT_to_DEFAULT.memcpy
+ ok 1 vfio_iommufd_multi_iommu_test.DEFAULT_to_DEFAULT.memcpy
+ #  RUN           vfio_iommufd_multi_iommu_test.DEFAULT_to_WITH_PT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.DEFAULT_to_WITH_PT.memcpy
+ ok 2 vfio_iommufd_multi_iommu_test.DEFAULT_to_WITH_PT.memcpy
+ #  RUN           vfio_iommufd_multi_iommu_test.DEFAULT_to_WITHOUT_PT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.DEFAULT_to_WITHOUT_PT.memcpy
+ ok 3 vfio_iommufd_multi_iommu_test.DEFAULT_to_WITHOUT_PT.memcpy
+ #  RUN           vfio_iommufd_multi_iommu_test.WITH_PT_to_DEFAULT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.WITH_PT_to_DEFAULT.memcpy
+ ok 4 vfio_iommufd_multi_iommu_test.WITH_PT_to_DEFAULT.memcpy
+ #  RUN           vfio_iommufd_multi_iommu_test.WITH_PT_to_WITH_PT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.WITH_PT_to_WITH_PT.memcpy
+ ok 5 vfio_iommufd_multi_iommu_test.WITH_PT_to_WITH_PT.memcpy
+ #  RUN           vfio_iommufd_multi_iommu_test.WITH_PT_to_WITHOUT_PT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.WITH_PT_to_WITHOUT_PT.memcpy
+ ok 6 vfio_iommufd_multi_iommu_test.WITH_PT_to_WITHOUT_PT.memcpy
+ #  RUN           vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_DEFAULT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_DEFAULT.memcpy
+ ok 7 vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_DEFAULT.memcpy
+ #  RUN           vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_WITH_PT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_WITH_PT.memcpy
+ ok 8 vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_WITH_PT.memcpy
+ #  RUN           vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_WITHOUT_PT.memcpy ...
+ #            OK  vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_WITHOUT_PT.memcpy
+ ok 9 vfio_iommufd_multi_iommu_test.WITHOUT_PT_to_WITHOUT_PT.memcpy
+ # PASSED: 9 / 9 tests passed.
+ # Totals: pass:9 fail:0 xfail:0 xpass:0 skip:0 error:0
+
+The vfio framework patch was earlier sent with a different series, but I
+am sending it separately in this series as this can go in independently:
+
+https://lore.kernel.org/all/20260107201800.2486137-3-skhawaja@google.com/
+
+Samiullah Khawaja (2):
+  vfio: selftests: Add support of creating multiple iommus from iommufd
+  vfio: selftests: Add iommufd multi iommu test
+
+ tools/testing/selftests/vfio/Makefile         |   1 +
+ .../vfio/lib/include/libvfio/iommu.h          |   5 +
+ .../lib/include/libvfio/vfio_pci_device.h     |   2 +
+ tools/testing/selftests/vfio/lib/iommu.c      |  62 +++++-
+ .../selftests/vfio/lib/vfio_pci_device.c      |  22 +-
+ .../vfio/vfio_iommufd_multi_iommu_test.c      | 203 ++++++++++++++++++
+ 6 files changed, 288 insertions(+), 7 deletions(-)
+ create mode 100644 tools/testing/selftests/vfio/vfio_iommufd_multi_iommu_test.c
+
+
+base-commit: 9974969c14031a097d6b45bcb7a06bb4aa525c40
+-- 
+2.54.0.545.g6539524ca2-goog
+
