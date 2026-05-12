@@ -1,0 +1,40 @@
+From 723d85d339a4158aaa4fadc5b7254f4c81f314fb Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Tue, 12 May 2026 17:26:09 +0000
+Subject: [PATCH 0/3] kho: Add support of kunit mocking KHO restore API
+
+To write kunit tests for preservation and restoration of liveupdate
+state in various subsystems without triggering the actual kexec, the KHO
+restore API needs to be mocked by the test writer. The mocking is done
+to allow testing of the individual components or functions in isolation.
+
+The patch series adds following to support kunit testing when using KHO
+API,
+
+- Add static stub hooks to mock the KHO restore API so the restore path
+  can be tested without triggering kexec.
+- Add helper function that can be used by the test writer to check if
+  memory is preserved in KHO tree.
+
+A kunit test for KHO API that tests allocation of preserved memory,
+preservation of pages and preservation of folio.
+
+Samiullah Khawaja (3):
+  kho: Add kunit static stubs
+  kho: Add helper function to check if pfns are preserved
+  kho: Add kunit test to verify preserve/restore pages and folio
+
+ include/asm-generic/vmlinux.lds.h       |   1 +
+ include/linux/kexec_handover.h          |   5 +
+ kernel/liveupdate/Kconfig               |  10 ++
+ kernel/liveupdate/Makefile              |   1 +
+ kernel/liveupdate/kexec_handover.c      |  61 ++++++++++-
+ kernel/liveupdate/kexec_handover_test.c | 132 ++++++++++++++++++++++++
+ 6 files changed, 209 insertions(+), 1 deletion(-)
+ create mode 100644 kernel/liveupdate/kexec_handover_test.c
+
+
+base-commit: 9974969c14031a097d6b45bcb7a06bb4aa525c40
+-- 
+2.54.0.563.g4f69b47b94-goog
+
