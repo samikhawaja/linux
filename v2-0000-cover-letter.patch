@@ -1,0 +1,59 @@
+From ca39e459fafdf2982566f6f33f35f4378a49cd07 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Thu, 21 May 2026 19:27:33 +0000
+Subject: [PATCH v2 0/3] kho: Add support for kunit mocking KHO restore API
+
+To write kunit tests for preservation and restoration of liveupdate
+state in various subsystems without triggering the actual kexec, the KHO
+restore API needs to be mocked by the test writer. The mocking is done
+to allow testing of the individual components or functions in isolation.
+
+The patch series adds the following to support kunit testing when using the KHO
+API:
+
+- Add static stub hooks to mock the KHO restore API so the restore path
+  can be tested without triggering kexec.
+- Add helper function that can be used by the test writer to check if
+  memory is preserved in KHO tree.
+
+Finally, it adds a KUnit test for the KHO API that verifies the allocation of
+preserved memory, and the preservation/restoration of pages and folios.
+
+KHO Kunit test run:
+
+ KTAP version 1
+ 1..1
+     KTAP version 1
+     # Subtest: kho_test
+     # module: kexec_handover_test
+     1..3
+     ok 1 kho_test_alloc_preserve
+     ok 2 kho_test_preserve_pages
+     ok 3 kho_test_preserve_folio
+ # kho_test: pass:3 fail:0 skip:0 total:3
+ # Totals: pass:3 fail:0 skip:0 total:3
+ ok 1 kho_test
+
+v2:
+ - Move kunit header includes above linux header includes.
+ - Use the __kho_preserve_pages_order() to get the order of preserved
+   pages instead of open order calculation math.
+
+Samiullah Khawaja (3):
+  kho: Add kunit static stubs
+  kho: Add helper function to check if pages are preserved
+  kho: Add kunit test to verify preserve/restore pages and folio
+
+ include/linux/kexec_handover.h          |   5 +
+ kernel/liveupdate/Kconfig               |  10 ++
+ kernel/liveupdate/Makefile              |   1 +
+ kernel/liveupdate/kexec_handover.c      |  63 +++++++++++-
+ kernel/liveupdate/kexec_handover_test.c | 131 ++++++++++++++++++++++++
+ 5 files changed, 209 insertions(+), 1 deletion(-)
+ create mode 100644 kernel/liveupdate/kexec_handover_test.c
+
+
+base-commit: ec4084bc445027a52f600e30a976928be1ba1950
+-- 
+2.54.0.746.g67dd491aae-goog
+
