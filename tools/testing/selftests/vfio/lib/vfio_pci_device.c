@@ -343,6 +343,17 @@ static void vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
 	ioctl_assert(device_fd, VFIO_DEVICE_ATTACH_IOMMUFD_PT, &args);
 }
 
+void vfio_pci_device_attach_iommu(struct vfio_pci_device *device, struct iommu *iommu)
+{
+	u32 pt_id = iommu->ioas_id;
+
+	/* Only iommufd supports changing struct iommu attachments */
+	VFIO_ASSERT_TRUE(iommu->iommufd);
+
+	vfio_device_attach_iommufd_pt(device->fd, pt_id);
+	device->iommu = iommu;
+}
+
 static void vfio_pci_iommufd_setup(struct vfio_pci_device *device, const char *bdf)
 {
 	const char *cdev_path = vfio_pci_get_cdev_path(bdf);
@@ -352,7 +363,7 @@ static void vfio_pci_iommufd_setup(struct vfio_pci_device *device, const char *b
 	free((void *)cdev_path);
 
 	device->dev_id = vfio_device_bind_iommufd(device->fd, device->iommu->iommufd);
-	vfio_device_attach_iommufd_pt(device->fd, device->iommu->ioas_id);
+	vfio_pci_device_attach_iommu(device, device->iommu);
 }
 
 struct vfio_pci_device *vfio_pci_device_init(const char *bdf, struct iommu *iommu)
