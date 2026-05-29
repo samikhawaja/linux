@@ -408,7 +408,7 @@ struct iommu_iova_range *iommu_iova_ranges(struct iommu *iommu, u32 *nranges)
 	return ranges;
 }
 
-static u32 iommufd_hwpt_alloc(struct iommu *iommu, u32 dev_id)
+static void iommufd_hwpt_alloc(struct iommu *iommu, u32 dev_id)
 {
 	struct iommu_hwpt_alloc args = {
 		.size = sizeof(args),
@@ -416,10 +416,47 @@ static u32 iommufd_hwpt_alloc(struct iommu *iommu, u32 dev_id)
 		.dev_id = dev_id,
 	};
 
+	VFIO_ASSERT_EQ(iommu->hwpt_id, 0);
 	ioctl_assert(iommu->iommufd, IOMMU_HWPT_ALLOC, &args);
-	return args.out_hwpt_id;
+
+	iommu->hwpt_id = args.out_hwpt_id;
 }
 
+static struct iommu *iommufd_new(int iommufd, u32 ioas_id)
+{
+	struct iommu *new;
+
+	new = iommu_alloc("iommufd");
+
+	new->iommufd = dup(iommufd);
+	VFIO_ASSERT_GT(new->iommufd, 0);
+
+	new->ioas_id = ioas_id;
+	return new;
+}
+
+/*** Public API for tests ***/
+
+struct iommu *iommufd_new_ioas(struct iommu *cur)
+{
+	return iommufd_new(cur->iommufd, iommufd_ioas_alloc(cur->iommufd));
+}
+
+struct iommu *iommufd_new_hwpt(struct iommu *cur, u32 dev_id)
+{
+	struct iommu *new = iommufd_new(cur->iommufd, cur->ioas_id);
+
+	iommufd_hwpt_alloc(new, dev_id);
+	return new;
+}
+
+struct iommu *iommufd_new_ioas_hwpt(struct iommu *cur, u32 dev_id)
+{
+	struct iommu *new = iommufd_new_ioas(cur);
+
+	iommufd_hwpt_alloc(new, dev_id);
+	return new;
+}
 static u32 iommufd_ioas_alloc(int iommufd)
 {
 	struct iommu_ioas_alloc args = {
