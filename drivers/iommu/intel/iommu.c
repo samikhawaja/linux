@@ -864,7 +864,7 @@ static bool dev_needs_extra_dtlb_flush(struct pci_dev *pdev)
 	return true;
 }
 
-static void iommu_enable_pci_ats(struct device_domain_info *info)
+void intel_iommu_enable_pci_ats(struct device_domain_info *info)
 {
 	struct pci_dev *pdev;
 
@@ -1225,7 +1225,7 @@ domain_context_mapping(struct dmar_domain *domain, struct device *dev)
 	if (ret)
 		return ret;
 
-	iommu_enable_pci_ats(info);
+	intel_iommu_enable_pci_ats(info);
 
 	return 0;
 }
@@ -2796,6 +2796,9 @@ static int blocking_domain_attach_dev(struct iommu_domain *domain,
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 
+	if (dev_iommu_restored_state(dev))
+		return intel_iommu_detach_restored_device(domain, dev);
+
 	iopf_for_domain_remove(info->domain ? &info->domain->domain : NULL, dev);
 	device_block_translation(dev);
 	return 0;
@@ -3164,6 +3167,9 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
 {
 	int ret;
 
+	if (dev_iommu_restored_state(dev))
+		return intel_iommu_restore_device(domain, dev);
+
 	device_block_translation(dev);
 
 	ret = paging_domain_compatible(domain, dev);
@@ -3376,7 +3382,7 @@ static void intel_iommu_probe_finalize(struct device *dev)
 		info->pasid_enabled = 1;
 
 	if (sm_supported(iommu) && !dev_is_real_dma_subdevice(dev)) {
-		iommu_enable_pci_ats(info);
+		intel_iommu_enable_pci_ats(info);
 		/* Assign a DEVTLB cache tag to the default domain. */
 		if (info->ats_enabled && info->domain) {
 			u16 did = domain_id_iommu(info->domain, iommu);
@@ -3407,11 +3413,13 @@ static void intel_iommu_release_device(struct device *dev)
 		device_rbtree_remove(info);
 	mutex_unlock(&iommu->iopf_lock);
 
-	if (sm_supported(iommu) && !dev_is_real_dma_subdevice(dev) &&
+	if (!dev_iommu_restored_state(dev) && sm_supported(iommu) &&
+	    !dev_is_real_dma_subdevice(dev) &&
 	    !context_copied(iommu, info->bus, info->devfn))
 		intel_pasid_teardown_sm_context(dev);
 
-	intel_pasid_free_table(dev);
+	if (!dev_iommu_restored_state(dev))
+		intel_pasid_free_table(dev);
 	intel_iommu_debugfs_remove_dev(info);
 	kfree(info);
 }
@@ -3872,6 +3880,9 @@ static int identity_domain_attach_dev(struct iommu_domain *domain,
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
 	int ret;
+
+	if (dev_iommu_restored_state(dev))
+		return intel_iommu_detach_restored_device(domain, dev);
 
 	device_block_translation(dev);
 
