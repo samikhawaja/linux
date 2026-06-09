@@ -864,7 +864,7 @@ static bool dev_needs_extra_dtlb_flush(struct pci_dev *pdev)
 	return true;
 }
 
-static void iommu_enable_pci_ats(struct device_domain_info *info)
+void intel_iommu_enable_pci_ats(struct device_domain_info *info)
 {
 	struct pci_dev *pdev;
 
@@ -1226,7 +1226,7 @@ domain_context_mapping(struct dmar_domain *domain, struct device *dev)
 	if (ret)
 		return ret;
 
-	iommu_enable_pci_ats(info);
+	intel_iommu_enable_pci_ats(info);
 
 	return 0;
 }
@@ -3169,6 +3169,9 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
 {
 	int ret;
 
+	if (dev_iommu_restored_state(dev))
+		return intel_iommu_restore_device(domain, dev);
+
 	device_block_translation(dev);
 
 	ret = paging_domain_compatible(domain, dev);
@@ -3381,7 +3384,7 @@ static void intel_iommu_probe_finalize(struct device *dev)
 		info->pasid_enabled = 1;
 
 	if (sm_supported(iommu) && !dev_is_real_dma_subdevice(dev)) {
-		iommu_enable_pci_ats(info);
+		intel_iommu_enable_pci_ats(info);
 		/* Assign a DEVTLB cache tag to the default domain. */
 		if (info->ats_enabled && info->domain) {
 			u16 did = domain_id_iommu(info->domain, iommu);
