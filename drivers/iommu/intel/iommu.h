@@ -1187,6 +1187,8 @@ void domain_detach_iommu(struct dmar_domain *domain, struct intel_iommu *iommu);
 void device_block_translation(struct device *dev);
 int paging_domain_compatible(struct iommu_domain *domain, struct device *dev);
 
+void intel_iommu_enable_pci_ats(struct device_domain_info *info);
+
 struct dev_pasid_info *
 domain_add_dev_pasid(struct iommu_domain *domain,
 		     struct device *dev, ioasid_t pasid);
@@ -1309,6 +1311,9 @@ void intel_iommu_unpreserve(struct iommu_device *iommu,
 void clear_unpreserved_context_entries(struct intel_iommu *iommu);
 void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 					       struct iommu_hw_ser *iommu_ser);
+int intel_iommu_restore_device(struct iommu_domain *domain,
+			       struct device *dev);
+int intel_iommu_detach_restored_device(struct device *dev);
 #else
 static inline int intel_iommu_preserve_device(struct device *dev,
 					      struct iommu_device_ser *device_ser)
@@ -1339,6 +1344,17 @@ static inline void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 static inline void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 							     struct iommu_hw_ser *iommu_ser)
 {
+}
+
+static inline int intel_iommu_restore_device(struct iommu_domain *domain,
+					     struct device *dev)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int intel_iommu_detach_restored_device(struct device *dev)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 
