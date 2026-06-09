@@ -1000,6 +1000,15 @@ context_set_sm_rid2pasid(struct context_entry *context, unsigned long pasid)
 }
 
 /*
+ * Clear the DTE(Device-TLB Enable) field of a scalable mode context
+ * entry.
+ */
+static inline void context_clear_sm_dte(struct context_entry *context)
+{
+	context->lo &= ~BIT_ULL(2);
+}
+
+/*
  * Set the DTE(Device-TLB Enable) field of a scalable mode context
  * entry.
  */
@@ -1309,6 +1318,9 @@ void intel_iommu_unpreserve(struct iommu_device *iommu,
 void clear_unpreserved_context_entries(struct intel_iommu *iommu);
 void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 					       struct iommu_hw_ser *iommu_ser);
+int intel_iommu_restore_device(struct iommu_domain *domain,
+			       struct device *dev);
+int intel_iommu_detach_restored_device(struct device *dev);
 #else
 static inline void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 {
@@ -1317,6 +1329,17 @@ static inline void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 static inline void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 							     struct iommu_hw_ser *iommu_ser)
 {
+}
+
+static inline int intel_iommu_restore_device(struct iommu_domain *domain,
+					     struct device *dev)
+{
+	return -EOPNOTSUPP;
+}
+
+static inline int intel_iommu_detach_restored_device(struct device *dev)
+{
+	return -EOPNOTSUPP;
 }
 #endif
 

@@ -12,6 +12,7 @@
 #include <linux/iommu-liveupdate.h>
 #include <linux/module.h>
 #include <linux/pci.h>
+#include <linux/pci-ats.h>
 
 #include "iommu.h"
 #include "../iommu-pages.h"
@@ -368,6 +369,300 @@ void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 	BUG_ON(iommu_for_each_preserved_device(_restore_used_domain_ids, iommu));
 }
 
+static void domain_detach_reattached_iommu(struct dmar_domain *domain,
+					   struct intel_iommu *iommu)
+{
+	struct iommu_domain_info *info;
+
+	guard(mutex)(&iommu->did_lock);
+	info = xa_load(&domain->iommu_array, iommu->seq_id);
+	if (--info->refcnt == 0) {
+		xa_erase(&domain->iommu_array, iommu->seq_id);
+		kfree(info);
+	}
+}
+
+static int domain_reattach_iommu(struct dmar_domain *domain,
+				 struct intel_iommu *iommu,
+				 struct iommu_device_ser *device_ser)
+{
+	struct iommu_domain_info *info, *curr;
+	int restored_did;
+	int ret;
+
+	if (!iommu_domain_restored_state(&domain->domain))
+		return -EINVAL;
+
+	restored_did = device_ser->domain_iommu_ser.attachment_id;
+	if (!ida_exists(&iommu->domain_ida, restored_did))
+		return -EINVAL;
+
+	info = kzalloc_obj(*info);
+	if (!info)
+		return -ENOMEM;
+
+	guard(mutex)(&iommu->did_lock);
+	curr = xa_load(&domain->iommu_array, iommu->seq_id);
+	if (curr) {
+		curr->refcnt++;
+		kfree(info);
+		return 0;
+	}
+
+	info->refcnt	= 1;
+	info->did	= restored_did;
+	info->iommu	= iommu;
+	curr = xa_cmpxchg(&domain->iommu_array, iommu->seq_id,
+			  NULL, info, GFP_KERNEL);
+	if (curr) {
+		ret = xa_err(curr) ? : -EBUSY;
+		goto err_unlock;
+	}
+
+	return 0;
+
+err_unlock:
+	kfree(info);
+	return ret;
+}
+
+struct update_context_entries_info {
+	struct device_domain_info *info;
+	bool enable_ats;
+	bool enable_pre;
+};
+
+static int update_context_alias(struct pci_dev *pdev, u16 alias, void *data)
+{
+	struct update_context_entries_info *update = data;
+	struct device_domain_info *info = update->info;
+	struct context_entry *context;
+	struct dmar_domain *domain;
+	struct intel_iommu *iommu;
+	u8 bus = PCI_BUS_NUM(alias);
+	u8 devfn = alias & 0xff;
+	u16 did;
+
+	context = iommu_context_addr(info->iommu, bus, devfn, 0);
+	if (!context)
+		return 0;
+
+	/*
+	 * Passthrough devices/domains are not preserved so the existing
+	 * translation type can only be multi-level or dev_iotlb.
+	 */
+	if (!sm_supported(info->iommu)) {
+		context_set_translation_type(context,
+					     update->enable_ats ? CONTEXT_TT_DEV_IOTLB :
+						      CONTEXT_TT_MULTI_LEVEL);
+	} else {
+		if (update->enable_ats)
+			context_set_sm_dte(context);
+		else
+			context_clear_sm_dte(context);
+
+		if (update->enable_pre)
+			context_set_sm_pre(context);
+		else
+			context_clear_sm_pre(context);
+	}
+	__iommu_flush_cache(info->iommu, context, sizeof(*context));
+
+	/*
+	 * Invalidations for context entry change as per 6.5.3.3:
+	 *
+	 * - Device-selective context-cache invalidation
+	 * - Domain-selective PASID-cache invalidation to affected domains
+	 * - Domain-selective IOTLB invalidation to affected domains
+	 * - Global Device-TLB invalidation to affected functions
+	 *
+	 * Note that the device TLB invalidation can be skipped if ATS was
+	 * enabled in previous kernel and disabled in this kernel at device
+	 * level. This is because as per the PCI specs devices are supposed to
+	 * invalidate the device TLB when ATS is disabled.
+	 */
+	domain = info->domain;
+	iommu = info->iommu;
+	did = domain_id_iommu(domain, iommu);
+
+	iommu->flush.flush_context(iommu, did, PCI_DEVID(bus, devfn),
+				   DMA_CCMD_MASK_NOBIT, DMA_CCMD_DEVICE_INVL);
+	if (sm_supported(iommu))
+		qi_flush_pasid_cache(iommu, did, QI_PC_ALL_PASIDS, 0);
+
+	iommu->flush.flush_iotlb(iommu, did, 0, 0, DMA_TLB_DSI_FLUSH);
+
+	return 0;
+}
+
+static void intel_iommu_restore_pci_ats_pri(struct device_domain_info *info,
+					    struct iommu_device_ser *device_ser)
+{
+	bool pre_update_pending = info->pri_supported;
+	struct update_context_entries_info update;
+	struct pci_dev *pdev;
+
+	if (!info->dev || !dev_is_pci(info->dev))
+		return;
+
+	pdev = to_pci_dev(info->dev);
+
+	update.info = info;
+	update.enable_ats = info->ats_supported;
+	update.enable_pre = pre_update_pending;
+
+	/*
+	 * Update ATS state in the context entries if there is a mismatch in ATS
+	 * support between the two kernels.
+	 *
+	 * Note that ATS needs to be enabled at context entries if it is enabled
+	 * at PCI device level. So depending on whether it was supported and
+	 * enabled in context entries in the previous kernel and supported in
+	 * the new kernel, we have to be careful about the ordering of
+	 * enable/disable in the context entries with respect to enablement at
+	 * PCI level. So here it is done in following order:
+	 *
+	 * - Enable in context entries if supported and was not enabled in
+	 *   context entries in the previous kernel.
+	 * - Enable or disable at PCI level depending on whether it is
+	 *   supported.
+	 * - Disable in context entries if not supported and was enabled in
+	 *   context entries in the previous kernel.
+	 *
+	 * Also enable PRE if supported as it was disabled by the previous
+	 * kernel.
+	 */
+	if (info->ats_supported && !device_ser->intel.ats_supported) {
+		pre_update_pending = false;
+		pci_for_each_dma_alias(pdev, update_context_alias, &update);
+	}
+
+	/*
+	 * Note that pci_liveupdate_adopt_ats() might force disable ATS if it is
+	 * disabled in the new kernel globally. In that case a device TLB
+	 * invalidation is not needed because as per PCI spec when ATS is
+	 * disabled device is supposed to invalidate the device TLB.
+	 */
+	if (pci_liveupdate_adopt_ats(pdev, VTD_PAGE_SHIFT, info->ats_supported))
+		info->ats_enabled = 1;
+
+	/*
+	 * Disable ATS in the context entries if it is not supported in the
+	 * current kernel and it was supported in the previous kernel.
+	 */
+	if ((!info->ats_supported &&
+	     device_ser->intel.ats_supported) || pre_update_pending)
+		pci_for_each_dma_alias(pdev, update_context_alias, &update);
+
+	/*
+	 * Update the serialized state to reflect the latest state of context
+	 * entries.
+	 */
+	device_ser->intel.ats_supported = info->ats_supported;
+	if (device_ser->intel.ats_enabled && !info->ats_enabled)
+		dev_warn_once(&pdev->dev,
+			      "ATS was enabled in previous kernel but disabled now\n");
+}
+
+/**
+ * intel_iommu_restore_device() - Restore device domain attachment after live update
+ * @domain: Restored domain
+ * @dev: Restored device
+ *
+ * Return: 0 on success, or negative error code.
+ */
+int intel_iommu_restore_device(struct iommu_domain *domain,
+			       struct device *dev)
+{
+	struct iommu_device_ser *device_ser = dev_iommu_restored_state(dev);
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct dmar_domain *dmar_domain = to_dmar_domain(domain);
+	struct intel_iommu *iommu = info->iommu;
+	unsigned long flags;
+	int ret;
+
+	if (!device_ser)
+		return -EINVAL;
+
+	if (dev_is_real_dma_subdevice(dev))
+		return -EOPNOTSUPP;
+
+	ret = domain_reattach_iommu(dmar_domain, iommu, device_ser);
+	if (ret)
+		return ret;
+
+	info->domain = dmar_domain;
+	info->domain_attached = true;
+	spin_lock_irqsave(&dmar_domain->lock, flags);
+	list_add(&info->link, &dmar_domain->devices);
+	spin_unlock_irqrestore(&dmar_domain->lock, flags);
+
+	/*
+	 * Restored domain is attached during probe, so this can be done here
+	 * for both legacy and scalable mode.
+	 */
+	intel_iommu_restore_pci_ats_pri(info, device_ser);
+
+	ret = cache_tag_assign_domain(dmar_domain, dev, IOMMU_NO_PASID);
+	if (ret)
+		goto err;
+
+	ret = iopf_for_domain_set(domain, dev);
+	if (ret)
+		goto err;
+
+	return 0;
+
+err:
+	/*
+	 * Detach the restored domain from device and iommu on failure, but keep
+	 * the hardware state intact. Also disable ATS if it was disabled in
+	 * previous kernel but enabled in this kernel.
+	 */
+	if (info->ats_enabled && !device_ser->intel.ats_enabled) {
+		pci_disable_ats(to_pci_dev(dev));
+		info->ats_enabled = 0;
+	}
+
+	info->domain_attached = false;
+	cache_tag_unassign_domain(info->domain, dev, IOMMU_NO_PASID);
+	spin_lock_irqsave(&info->domain->lock, flags);
+	list_del(&info->link);
+	spin_unlock_irqrestore(&info->domain->lock, flags);
+
+	domain_detach_reattached_iommu(info->domain, iommu);
+	info->domain = NULL;
+	return ret;
+}
+
+int intel_iommu_detach_restored_device(struct device *dev)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct intel_iommu *iommu = info->iommu;
+	struct iommu_domain *domain;
+	unsigned long flags;
+
+	if (!info->domain_attached || !info->domain)
+		return -EINVAL;
+
+	domain = &info->domain->domain;
+	if (!iommu_domain_restored_state(domain))
+		return -EINVAL;
+
+	iopf_for_domain_remove(domain, dev);
+	cache_tag_unassign_domain(info->domain, dev, IOMMU_NO_PASID);
+	info->domain_attached = false;
+
+	spin_lock_irqsave(&info->domain->lock, flags);
+	list_del(&info->link);
+	spin_unlock_irqrestore(&info->domain->lock, flags);
+
+	domain_detach_reattached_iommu(info->domain, iommu);
+	info->domain = NULL;
+
+	return 0;
+}
+
 /**
  * intel_iommu_preserve_device() - Intel IOMMU callback to preserve device state
  * @dev: Target device
@@ -396,6 +691,8 @@ int intel_iommu_preserve_device(struct device *dev,
 	if (ret)
 		return ret;
 
+	device_ser->intel.ats_enabled = info->ats_enabled;
+	device_ser->intel.ats_supported = info->ats_supported;
 	device_ser->domain_iommu_ser.attachment_id = domain_id_iommu(info->domain,
 								     info->iommu);
 	return 0;

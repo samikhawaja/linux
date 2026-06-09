@@ -130,6 +130,17 @@ struct iommu_dev_map_ser {
 } __packed;
 
 /**
+ * struct iommu_device_intel_ser - Intel specific state of serialized device
+ * @ats_enabled: Whether ATS was enabled in the previous kernel.
+ * @ats_supported: Whether ATS was supported in the previous kernel.
+ */
+struct iommu_device_intel_ser {
+	u8 ats_enabled;
+	u8 ats_supported;
+	u8 padding[6];
+} __packed;
+
+/**
  * struct iommu_device_ser - Serialized state of a device
  * @hdr: Common object header
  * @devid: Device ID
@@ -143,6 +154,9 @@ struct iommu_device_ser {
 	u32 pci_domain_nr;
 	u64 dma_owner_token;
 	struct iommu_dev_map_ser domain_iommu_ser;
+	union {
+		struct iommu_device_intel_ser intel;
+	};
 } __packed;
 
 /* There are maximum 256 buses, so maximum 512 context tables */
