@@ -3184,6 +3184,24 @@ intel_iommu_domain_alloc_paging_flags(struct device *dev, u32 flags,
 	if (user_data)
 		return ERR_PTR(-EOPNOTSUPP);
 
+	/*
+	 * A restored device translates through the preserved page table, so
+	 * use the stage of its preserved RID_PASID entry. The stage allocators
+	 * reject flags that the stage doesn't support.
+	 */
+	if (dev_iommu_restored_state(dev)) {
+		switch (intel_iommu_restored_pgtt(dev)) {
+		case PASID_ENTRY_PGTT_FL_ONLY:
+			return intel_iommu_domain_alloc_first_stage(dev, iommu,
+								    flags);
+		case PASID_ENTRY_PGTT_SL_ONLY:
+			return intel_iommu_domain_alloc_second_stage(dev, iommu,
+								     flags);
+		default:
+			return ERR_PTR(-EINVAL);
+		}
+	}
+
 	/* Prefer first stage if possible by default. */
 	domain = intel_iommu_domain_alloc_first_stage(dev, iommu, flags);
 	if (domain != ERR_PTR(-EOPNOTSUPP))
@@ -3323,6 +3341,9 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
 				     struct iommu_domain *old)
 {
 	int ret;
+
+	if (dev_iommu_restored_state(dev))
+		return intel_iommu_attach_restored_device(domain, dev);
 
 	device_block_translation(dev);
 
@@ -3567,16 +3588,23 @@ static void intel_iommu_release_device(struct device *dev)
 		info->pasid_enabled = 0;
 	}
 
+	if (dev_iommu_restored_state(dev))
+		intel_iommu_detach_restored_device(dev);
+
 	mutex_lock(&iommu->iopf_lock);
 	if (dev_is_pci(dev) && pci_ats_supported(to_pci_dev(dev)))
 		device_rbtree_remove(info);
 	mutex_unlock(&iommu->iopf_lock);
 
-	if (sm_supported(iommu) && !dev_is_real_dma_subdevice(dev) &&
+	if (!dev_iommu_restored_state(dev) && sm_supported(iommu) &&
+	    !dev_is_real_dma_subdevice(dev) &&
 	    !context_copied(iommu, info->bus, info->devfn))
 		intel_pasid_teardown_sm_context(dev);
 
-	intel_pasid_free_table(dev);
+	if (!dev_iommu_restored_state(dev))
+		intel_pasid_free_table(dev);
+	else
+		kfree(info->pasid_table);
 	intel_iommu_debugfs_remove_dev(info);
 	kfree(info);
 }
