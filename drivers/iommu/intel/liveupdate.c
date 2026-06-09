@@ -243,6 +243,50 @@ void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 	iommu_for_each_preserved_device(_restore_used_domain_ids, iommu);
 }
 
+int intel_iommu_domain_reattach_iommu(struct dmar_domain *domain,
+				      struct intel_iommu *iommu,
+				      struct iommu_device_ser *device_ser)
+{
+	struct iommu_domain_info *info, *curr;
+	int ret = -ENOSPC;
+	int restored_did;
+
+	if (domain->domain.type == IOMMU_DOMAIN_SVA)
+		return 0;
+
+	restored_did = device_ser->domain_iommu_ser.attachment_id;
+	if (!ida_exists(&iommu->domain_ida, restored_did))
+		return -EINVAL;
+
+	info = kzalloc_obj(*info);
+	if (!info)
+		return -ENOMEM;
+
+	guard(mutex)(&iommu->did_lock);
+	curr = xa_load(&domain->iommu_array, iommu->seq_id);
+	if (curr) {
+		curr->refcnt++;
+		kfree(info);
+		return 0;
+	}
+
+	info->refcnt	= 1;
+	info->did	= restored_did;
+	info->iommu	= iommu;
+	curr = xa_cmpxchg(&domain->iommu_array, iommu->seq_id,
+			  NULL, info, GFP_KERNEL);
+	if (curr) {
+		ret = xa_err(curr) ? : -EBUSY;
+		goto err_unlock;
+	}
+
+	return 0;
+
+err_unlock:
+	kfree(info);
+	return ret;
+}
+
 int intel_iommu_preserve_device(struct device *dev,
 				struct iommu_device_ser *device_ser)
 {
