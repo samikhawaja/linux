@@ -1830,6 +1830,9 @@ static int iommu_suspend(void *data)
 	struct intel_iommu *iommu = NULL;
 	unsigned long flag;
 
+	if (iommu_preserved_state(&iommu->iommu))
+		return -EBUSY;
+
 	iommu_flush_all();
 
 	for_each_active_iommu(iommu, drhd) {
@@ -2377,8 +2380,11 @@ void intel_iommu_shutdown(void)
 		/* Disable PMRs explicitly here. */
 		iommu_disable_protect_mem_regions(iommu);
 
-		/* Make sure the IOMMUs are switched off */
-		iommu_disable_translation(iommu);
+		/* Make sure the IOMMUs are switched off if not preserved. */
+		if (iommu_preserved_state(&iommu->iommu))
+			clear_unpreserved_context_entries(iommu);
+		else
+			iommu_disable_translation(iommu);
 	}
 }
 
@@ -2702,7 +2708,7 @@ static int domain_context_clear_one_cb(struct pci_dev *pdev, u16 alias, void *op
  * devices, unbinding the driver from any one of them will possibly leave
  * the others unable to operate.
  */
-static void domain_context_clear(struct device_domain_info *info)
+void domain_context_clear(struct device_domain_info *info)
 {
 	if (!dev_is_pci(info->dev)) {
 		domain_context_clear_one(info, info->bus, info->devfn);
