@@ -924,6 +924,15 @@ static inline void context_set_fault_enable(struct context_entry *context)
 	context->lo &= (((u64)-1) << 2) | 1;
 }
 
+static inline void context_set_fault_disable(struct context_entry *context)
+{
+	u64 val;
+
+	val = READ_ONCE(context->lo) | 2ULL;
+	WRITE_ONCE(context->lo, val);
+	dma_wmb();
+}
+
 static inline void context_set_translation_type(struct context_entry *context,
 						unsigned long value)
 {
@@ -1241,6 +1250,7 @@ void cache_tag_flush_all(struct dmar_domain *domain);
 void cache_tag_flush_range_np(struct dmar_domain *domain, unsigned long start,
 			      unsigned long end);
 
+void domain_context_clear(struct device_domain_info *info);
 void intel_context_flush_no_pasid(struct device_domain_info *info,
 				  struct context_entry *context, u16 did);
 
@@ -1293,6 +1303,7 @@ int intel_iommu_preserve(struct iommu_device *iommu,
 			 struct iommu_hw_ser *iommu_ser);
 void intel_iommu_unpreserve(struct iommu_device *iommu,
 			    struct iommu_hw_ser *iommu_ser);
+void clear_unpreserved_context_entries(struct intel_iommu *iommu);
 #else
 static inline int intel_iommu_preserve_device(struct device *dev,
 					      struct iommu_device_ser *device_ser)
@@ -1308,6 +1319,10 @@ static inline int intel_iommu_preserve(struct iommu_device *iommu,
 
 static inline void intel_iommu_unpreserve(struct iommu_device *iommu,
 					  struct iommu_hw_ser *iommu_ser)
+{
+}
+
+static inline void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 {
 }
 #endif
