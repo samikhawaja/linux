@@ -1967,6 +1967,14 @@ static int iommu_suspend(void *data)
 
 	iommu_flush_all();
 
+	/*
+	 * Note that IOMMU suspend doesn't affect live update. The state
+	 * preserved during live update is not released and remains valid during
+	 * suspend and reused during IOMMU resume.
+	 *
+	 * Also note deployment of suspend/resume and live updated use case
+	 * should be mostly mutually exclusive.
+	 */
 	for_each_active_iommu(iommu, drhd) {
 		iommu_disable_translation(iommu);
 
@@ -2494,6 +2502,20 @@ static void intel_disable_iommus(void)
 		iommu_disable_translation(iommu);
 }
 
+static void intel_iommu_mask_interrupts(struct intel_iommu *iommu)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&iommu->register_lock, flags);
+	writel(DMA_FECTL_IM, iommu->reg + DMAR_FECTL_REG);
+	readl(iommu->reg + DMAR_FECTL_REG);
+	if (ecap_prs(iommu->ecap)) {
+		writel(DMA_FECTL_IM, iommu->reg + DMAR_PECTL_REG);
+		readl(iommu->reg + DMAR_PECTL_REG);
+	}
+	raw_spin_unlock_irqrestore(&iommu->register_lock, flags);
+}
+
 void intel_iommu_shutdown(void)
 {
 	struct dmar_drhd_unit *drhd;
@@ -2512,8 +2534,24 @@ void intel_iommu_shutdown(void)
 		/* Disable PMRs explicitly here. */
 		iommu_disable_protect_mem_regions(iommu);
 
-		/* Make sure the IOMMUs are switched off */
-		iommu_disable_translation(iommu);
+		/* Make sure the IOMMUs are switched off if not preserved. */
+		if (iommu_preserved_state(&iommu->iommu)) {
+			clear_unpreserved_context_entries(drhd);
+
+			/*
+			 * Only the translation state is preserved. The next
+			 * kernel sets up its own invalidation queue, page
+			 * request queue and fault interrupts, so stop the
+			 * hardware from using the ones of this kernel. Page
+			 * requests can't be disabled at the IOMMU level while
+			 * translation is enabled, but PRI is not enabled for
+			 * the preserved devices.
+			 */
+			dmar_disable_qi(iommu);
+			intel_iommu_mask_interrupts(iommu);
+		} else {
+			iommu_disable_translation(iommu);
+		}
 	}
 }
 
