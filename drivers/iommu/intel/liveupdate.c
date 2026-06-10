@@ -82,6 +82,172 @@ static int preserve_context_table(struct intel_iommu *iommu,
 	return 0;
 }
 
+static void clear_unpreserved_context_root_entries(struct intel_iommu *iommu,
+						   struct iommu_hw_ser *ser)
+{
+	struct root_entry *root;
+	int i;
+
+	/*
+	 * Individual invalidations for each context table removal are not
+	 * needed as we issue global invalidations later.
+	 */
+	for (i = 0; i < ROOT_ENTRY_NR; i++) {
+		root = &iommu->root_entry[i];
+
+		if (!is_context_table_preserved(iommu, ser, i, 0) && (root->lo & 1)) {
+			root->lo = 0;
+			__iommu_flush_cache(iommu,
+					    &root->lo,
+					    sizeof(root->lo));
+		}
+
+		if (!sm_supported(iommu))
+			continue;
+
+		if (!is_context_table_preserved(iommu, ser, i, 0x80) && (root->hi & 1)) {
+			root->hi = 0;
+			__iommu_flush_cache(iommu,
+					    &root->hi,
+					    sizeof(root->hi));
+		}
+	}
+}
+
+static void clear_unpreserved_context(struct intel_iommu *iommu, u8 bus, u8 devfn)
+{
+	struct context_entry *context;
+
+	/*
+	 * This cleanup is done during shutdown, so it should be fine to only
+	 * clear the entries here and issue one global invalidation later to
+	 * invalidate all cleared entries.
+	 *
+	 * Note that the device IOTLB invalidation for unpreserved devices is
+	 * skipped this way. This matches the normal kexec reboot, where the
+	 * IOMMU translation is disabled without invalidating the device IOTLBs,
+	 * and the unpreserved devices go through the same flow in the next
+	 * kernel as they do after a normal kexec reboot. Issuing device IOTLB
+	 * invalidations this late during shutdown could also cause invalidation
+	 * timeouts, as drivers might have moved devices to a low power state,
+	 * and would add to the shutdown time.
+	 *
+	 * The iommu lock is not needed as the context tables are never removed
+	 * and the new ones are not added during shutdown.
+	 */
+	context = iommu_context_addr(iommu, bus, devfn, 0);
+	if (context) {
+		/*
+		 * Individual invalidations are not needed as we issue global
+		 * invalidations later once all the cleanups are done.
+		 */
+		context_clear_present(context);
+		__iommu_flush_cache(iommu, context, sizeof(*context));
+		context_clear_entry(context);
+		__iommu_flush_cache(iommu, context, sizeof(*context));
+	}
+}
+
+static int clear_unpreserved_alias_cb(struct pci_dev *pdev, u16 alias, void *data)
+{
+	struct intel_iommu *iommu = data;
+
+	clear_unpreserved_context(iommu, PCI_BUS_NUM(alias), alias & 0xff);
+	return 0;
+}
+
+static void intel_iommu_mask_interrupts(struct intel_iommu *iommu)
+{
+	unsigned long flags;
+
+	raw_spin_lock_irqsave(&iommu->register_lock, flags);
+	writel(DMA_FECTL_IM, iommu->reg + DMAR_FECTL_REG);
+	readl(iommu->reg + DMAR_FECTL_REG);
+	if (ecap_prs(iommu->ecap)) {
+		writel(DMA_FECTL_IM, iommu->reg + DMAR_PECTL_REG);
+		readl(iommu->reg + DMAR_PECTL_REG);
+	}
+	raw_spin_unlock_irqrestore(&iommu->register_lock, flags);
+}
+
+/**
+ * intel_iommu_shutdown_preserved() - Shut down a preserved IOMMU before kexec
+ * @drhd: Target DMAR unit
+ *
+ * Clear the context entries of unpreserved devices, and stop the hardware from
+ * using the invalidation queue and interrupts of this kernel. Translation is
+ * left enabled for the preserved devices.
+ */
+void intel_iommu_shutdown_preserved(struct dmar_drhd_unit *drhd)
+{
+	struct intel_iommu *iommu = drhd->iommu;
+	struct pci_dev *pdev = NULL;
+	struct device *tmp;
+	int i;
+
+	/*
+	 * Clear context entries for unpreserved devices because during kexec
+	 * reboot and shutdown the devices do not go through the release flow,
+	 * so there might be stale entries in the root table and context tables.
+	 */
+	for_each_pci_dev(pdev) {
+		struct device *dev = &pdev->dev;
+
+		if (!dev->iommu || dev->iommu->iommu_dev != &iommu->iommu)
+			continue;
+
+		if (dev_iommu_preserved_state(dev))
+			continue;
+
+		pci_for_each_dma_alias(pdev, clear_unpreserved_alias_cb, iommu);
+	}
+
+	/*
+	 * device_lookup_iommu() only accepts non-PCI devices through ACPI
+	 * namespace device scope entries, using the scope bus/devfn. Only PCI
+	 * devices can be preserved, so clear all of these.
+	 */
+	rcu_read_lock();
+	for_each_active_dev_scope(drhd->devices, drhd->devices_cnt, i, tmp) {
+		if (!dev_is_pci(tmp))
+			clear_unpreserved_context(iommu, drhd->devices[i].bus,
+						  drhd->devices[i].devfn);
+	}
+	rcu_read_unlock();
+
+	/*
+	 * New unpreserved context tables for unpreserved devices might have
+	 * been added after preservation, so the root table entries for
+	 * unpreserved context tables need to be removed.
+	 */
+	clear_unpreserved_context_root_entries(iommu,
+					       iommu_preserved_state(&iommu->iommu));
+
+	/*
+	 * Some devices might not have teardown/detached properly depending on
+	 * whether a proper device remove is done before kexec is triggered.
+	 * Also unpreserved context tables and entries are removed during
+	 * shutdown. So issue global invalidations to remove references to
+	 * unpreserved tables and entries.
+	 */
+	iommu->flush.flush_context(iommu, 0, 0, 0, DMA_CCMD_GLOBAL_INVL);
+	if (sm_supported(iommu))
+		qi_flush_pasid_cache(iommu, 0, QI_PC_GLOBAL, 0);
+	iommu->flush.flush_iotlb(iommu, 0, 0, 0, DMA_TLB_GLOBAL_FLUSH);
+
+	/*
+	 * Only the translation state is preserved. The next kernel sets up its
+	 * own invalidation queue, page request queue and fault interrupts, so
+	 * stop the hardware from using the ones of this kernel. This must be
+	 * done after the above invalidations, as they use the invalidation
+	 * queue. Page requests can't be disabled at the IOMMU level while
+	 * translation is enabled, but PRI is not enabled for the preserved
+	 * devices.
+	 */
+	dmar_disable_qi(iommu);
+	intel_iommu_mask_interrupts(iommu);
+}
+
 static void unpreserve_iommu_context_tables(struct intel_iommu *iommu,
 					    struct iommu_hw_ser *ser)
 {
