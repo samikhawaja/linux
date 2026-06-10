@@ -1306,6 +1306,7 @@ int intel_iommu_preserve(struct iommu_device *iommu,
 			 struct iommu_hw_ser *iommu_ser);
 void intel_iommu_unpreserve(struct iommu_device *iommu,
 			    struct iommu_hw_ser *iommu_ser);
+void clear_unpreserved_context_entries(struct intel_iommu *iommu);
 #else
 static inline int intel_iommu_preserve_device(struct device *dev,
 					      struct iommu_device_ser *device_ser)
@@ -1326,6 +1327,10 @@ static inline int intel_iommu_preserve(struct iommu_device *iommu,
 
 static inline void intel_iommu_unpreserve(struct iommu_device *iommu,
 					  struct iommu_hw_ser *iommu_ser)
+{
+}
+
+static inline void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 {
 }
 #endif
