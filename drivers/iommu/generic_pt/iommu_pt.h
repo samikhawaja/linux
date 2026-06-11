@@ -1003,7 +1003,7 @@ static int NS(preserve)(struct pt_iommu *iommu_table, struct iommu_domain_ser *s
 	 * Use the max_vasz_lg2 from range, as that is the current one if
 	 * DYNAMIC_TOP is supported.
 	 */
-	ser->vasz = range->max_vasz_lg2;
+	ser->vasz = range.max_vasz_lg2;
 	ser->sign_extend = pt_feature(common, PT_FEAT_SIGN_EXTEND);
 
 	return 0;
