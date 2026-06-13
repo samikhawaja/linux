@@ -1,0 +1,47 @@
+From 06548a938d7bdf178800e59604ea71ff8167b69d Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Thu, 20 Aug 2026 18:00:55 +0000
+Subject: [PATCH v3 0/1] liveupdate: Add internal APIs for file preservation
+
+Note: Sending v3 of this as it was requested to document some of the
+discussion we had on the email.
+
+Live update orchestrator file handlers depend on the preservation of
+other files. To make sure that the dependency is preserved, the file
+handlers needs to fetch the preservation token of the preserved
+dependency. Similarly during restore, a file handler wants to fetch the
+restored file of the dependency.
+
+There are two known usecases of this,
+
+- VFIO-Cdev preservation requires the preservation of iommufd. This is
+  required by the IOMMU preservation series:
+  https://lore.kernel.org/all/20260427175633.1978233-1-skhawaja@google.com/
+- guest_memfd preservation requires the preservation of kvmfd. This is
+  required by the guest_memfd preservation series:
+  https://lore.kernel.org/all/20ae20f9d1a198b289444ebb4c824314cbba1bcf.1780676742.git.tarunsahu@google.com/
+
+This patch was being sent as part of the IOMMU preservation series, but
+now it is being sent separately.
+
+v3:
+- Add File Handler dependency documentation.
+
+v2:
+- rebased on liveupdate/next to resolve conflicts
+- Added a note about resolution of dependencies based on offline
+  discussion with Pasha and David.
+
+Pasha Tatashin (1):
+  liveupdate: luo_file: Add internal APIs for file preservation
+
+ include/linux/liveupdate.h       | 22 +++++++++
+ kernel/liveupdate/luo_file.c     | 84 ++++++++++++++++++++++++++++++++
+ kernel/liveupdate/luo_internal.h | 17 +++++++
+ 3 files changed, 123 insertions(+)
+
+
+base-commit: 3a0b8fa2eb36afc88b62a95f33f0c77c71fa5ded
+-- 
+2.55.0.766.g2966f0265a-goog
+
