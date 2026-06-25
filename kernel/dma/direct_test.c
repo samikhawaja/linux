@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * KUnit test for DMA direct live update preservation.
+ * KUnit test for DMA alloction live update preservation.
  */
 
 #include <kunit/test.h>
@@ -11,6 +11,21 @@
 #include <linux/kho/abi/dma_alloc.h>
 #include <linux/kexec_handover.h>
 #include <linux/slab.h>
+
+static const size_t dma_test_sizes[] = {
+	128,
+	PAGE_SIZE,
+	2 * PAGE_SIZE,
+	3 * PAGE_SIZE,
+	8 * PAGE_SIZE,
+};
+
+static void dma_size_desc(const size_t *size, char *desc)
+{
+	snprintf(desc, KUNIT_PARAM_DESC_SIZE, "size=%zu", *size);
+}
+
+KUNIT_ARRAY_PARAM(dma_size, dma_test_sizes, dma_size_desc);
 
 static struct page *mock_kho_restore_pages(phys_addr_t phys, unsigned long nr_pages)
 {
@@ -34,12 +49,13 @@ static struct folio *mock_kho_restore_folio(phys_addr_t phys)
 	return folio;
 }
 
-static void test_dma_direct_preserve_restore_common(struct kunit *test, bool coherent)
+static void test_dma_direct_preserve_restore_common(struct kunit *test,
+						    bool coherent,
+						    size_t size)
 {
 	struct device dev = {0};
 	void *addr1, *addr2;
 	dma_addr_t handle1, handle2;
-	size_t size = PAGE_SIZE * 4; /* Test 4 pages */
 	unsigned long nr_pages = 1 << get_order(size);
 	u64 state;
 	int ret;
@@ -86,19 +102,21 @@ static void test_dma_direct_preserve_restore_common(struct kunit *test, bool coh
 
 static void test_dma_direct_coherent(struct kunit *test)
 {
-	test_dma_direct_preserve_restore_common(test, true);
+	const size_t *size = test->param_value;
+	test_dma_direct_preserve_restore_common(test, true, *size);
 }
 
 static void test_dma_direct_non_coherent(struct kunit *test)
 {
-	test_dma_direct_preserve_restore_common(test, false);
+	const size_t *size = test->param_value;
+	test_dma_direct_preserve_restore_common(test, false, *size);
 }
 
 static void test_dma_direct_cma(struct kunit *test)
 {
 #ifdef CONFIG_DMA_CMA
 	struct device dev = {0};
-	size_t size = PAGE_SIZE * 4; /* Test 4 pages */
+	const size_t *size = test->param_value;
 	void *addr1;
 	dma_addr_t handle1;
 	u64 state;
@@ -115,24 +133,24 @@ static void test_dma_direct_cma(struct kunit *test)
 #endif
 
 	/* Allocate from CMA */
-	addr1 = dma_alloc_coherent(&dev, size, &handle1, GFP_KERNEL);
+	addr1 = dma_alloc_coherent(&dev, *size, &handle1, GFP_KERNEL);
 	if (!addr1) {
 		kunit_skip(test, "DMA allocation failed (unsupported configuration)");
 		return;
 	}
 
-	ret = dma_preserve_coherent_allocation(&dev, addr1, PAGE_SIZE, handle1, &state);
+	ret = dma_preserve_coherent_allocation(&dev, addr1, *size, handle1, &state);
 	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
 
-	dma_free_coherent(&dev, size, addr1, handle1);
+	dma_free_coherent(&dev, *size, addr1, handle1);
 #else
 	kunit_skip(test, "CONFIG_DMA_CMA is disabled");
 #endif
 }
 
 static struct kunit_case dma_direct_test_cases[] = {
-	KUNIT_CASE(test_dma_direct_coherent),
-	KUNIT_CASE(test_dma_direct_non_coherent),
+	KUNIT_CASE_PARAM(test_dma_direct_coherent, dma_size_gen_params),
+	KUNIT_CASE_PARAM(test_dma_direct_non_coherent, dma_size_gen_params),
 	KUNIT_CASE(test_dma_direct_cma),
 	{}
 };
