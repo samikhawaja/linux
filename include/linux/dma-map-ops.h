@@ -7,6 +7,7 @@
 #define _LINUX_DMA_MAP_OPS_H
 
 #include <linux/dma-mapping.h>
+#include <kunit/static_stub.h>
 #include <linux/pgtable.h>
 #include <linux/slab.h>
 
@@ -241,6 +242,7 @@ static inline bool dev_is_dma_coherent(struct device *dev)
 
 static inline bool dev_is_dma_coherent(struct device *dev)
 {
+	KUNIT_STATIC_STUB_REDIRECT(dev_is_dma_coherent, dev);
 	return true;
 }
 #endif

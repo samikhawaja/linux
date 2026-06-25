@@ -49,6 +49,11 @@ static struct folio *mock_kho_restore_folio(phys_addr_t phys)
 	return folio;
 }
 
+static bool mock_dev_is_dma_coherent(struct device *dev)
+{
+	return false;
+}
+
 static void test_dma_direct_preserve_restore_common(struct kunit *test,
 						    bool coherent,
 						    size_t size)
@@ -65,10 +70,8 @@ static void test_dma_direct_preserve_restore_common(struct kunit *test,
     defined(CONFIG_ARCH_HAS_SYNC_DMA_FOR_CPU_ALL)
 	dev.dma_coherent = coherent;
 #else
-	if (!coherent) {
-		kunit_skip(test, "Architecture does not support non-coherent DMA");
-		return;
-	}
+	if (!coherent)
+		kunit_activate_static_stub(test, dev_is_dma_coherent, mock_dev_is_dma_coherent);
 #endif
 
 	kunit_activate_static_stub(test, kho_restore_pages, mock_kho_restore_pages);
@@ -116,7 +119,7 @@ static void test_dma_direct_cma(struct kunit *test)
 {
 #ifdef CONFIG_DMA_CMA
 	struct device dev = {0};
-	const size_t *size = test->param_value;
+	size_t size = PAGE_SIZE * 4;
 	void *addr1;
 	dma_addr_t handle1;
 	u64 state;
@@ -133,16 +136,16 @@ static void test_dma_direct_cma(struct kunit *test)
 #endif
 
 	/* Allocate from CMA */
-	addr1 = dma_alloc_coherent(&dev, *size, &handle1, GFP_KERNEL);
+	addr1 = dma_alloc_coherent(&dev, size, &handle1, GFP_KERNEL);
 	if (!addr1) {
 		kunit_skip(test, "DMA allocation failed (unsupported configuration)");
 		return;
 	}
 
-	ret = dma_preserve_coherent_allocation(&dev, addr1, *size, handle1, &state);
+	ret = dma_preserve_coherent_allocation(&dev, addr1, size, handle1, &state);
 	KUNIT_EXPECT_EQ(test, ret, -EOPNOTSUPP);
 
-	dma_free_coherent(&dev, *size, addr1, handle1);
+	dma_free_coherent(&dev, size, addr1, handle1);
 #else
 	kunit_skip(test, "CONFIG_DMA_CMA is disabled");
 #endif
