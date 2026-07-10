@@ -1039,6 +1039,16 @@ static int NS(restore)(struct pt_iommu *iommu_table, struct iommu_domain_ser *se
 	struct pt_common *common = common_from_iommu(iommu_table);
 	struct pt_range range;
 
+	if (ser->vasz > common->max_oasz_lg2 ||
+	    ser->top_level > PT_MAX_TOP_LEVEL)
+		return -EINVAL;
+
+	/*
+	 * Override the max_vasz_lg2 here to the one calculated using top_range
+	 * in previous kernel. This makes sure that any later page walks use the
+	 * clamped max_vasz_lg2 instead of using the full hardware maximum
+	 * max_vasz_lg2.
+	 */
 	common->max_vasz_lg2 = ser->vasz;
 
 	/*
@@ -1062,8 +1072,12 @@ static int NS(restore)(struct pt_iommu *iommu_table, struct iommu_domain_ser *se
 	range = pt_all_range(common);
 	iommu_restore_pages(ser->top_table_phys);
 
-	/* Free new table */
-	iommu_free_pages(range.top_table);
+	/*
+	 * The old top_table can be freed here as it is not used for any IOMMU
+	 * mappings yet, because the restore happens during device probe.
+	 */
+	iommu_pages_free_incoherent(range.top_table,
+				    iommu_table->iommu_device);
 
 	/* Set the restored top table */
 	pt_top_set(common, phys_to_virt(ser->top_table_phys), ser->top_level);
