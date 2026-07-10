@@ -469,6 +469,7 @@ int intel_iommu_preserve_device(struct device *dev,
 
 	device_ser->intel.pasid_table = virt_to_phys(pasid_table->table);
 	device_ser->intel.max_pasid = pasid_table->max_pasid;
+
 	return 0;
 }
 
