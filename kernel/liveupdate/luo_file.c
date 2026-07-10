@@ -984,7 +984,8 @@ EXPORT_SYMBOL_GPL(liveupdate_get_token_outgoing);
  *
  * The caller receives a new reference to the file and must call fput() when it
  * is no longer needed. The file's lifetime is managed by LUO and any userspace
- * file descriptors.
+ * file descriptors. Note that it should not be used in case of circular
+ * dependencies as caller might get into a deadlock when retrieving itself.
  *
  * Context: It must be called with session mutex acquired of a restored session.
  * Return: 0 on success. Returns -ENOENT if no file with the matching token is
