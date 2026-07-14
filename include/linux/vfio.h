@@ -434,10 +434,16 @@ void vfio_virqfd_flush_thread(struct virqfd **pvirqfd);
 
 #if IS_ENABLED(CONFIG_VFIO_DEVICE_CDEV)
 bool vfio_file_is_bound_cdev(struct file *file);
+struct file *vfio_device_liveupdate_cdev_open(struct vfio_device *device);
 #else
 static inline bool vfio_file_is_bound_cdev(struct file *file)
 {
 	return false;
+}
+
+static inline struct file *vfio_device_liveupdate_cdev_open(struct vfio_device *device)
+{
+	return ERR_PTR(-EOPNOTSUPP);
 }
 #endif /* IS_ENABLED(CONFIG_VFIO_DEVICE_CDEV) */
 
