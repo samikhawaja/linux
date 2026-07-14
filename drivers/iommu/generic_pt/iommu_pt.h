@@ -972,6 +972,11 @@ static void NS(unpreserve)(struct pt_iommu *iommu_table, struct iommu_domain_ser
 	};
 
 	iommu_pages_list_add(&collect.free_list, range.top_table);
+
+	/*
+	 * pt_walk_range() will never fail as check_mapped is not set in the
+	 * collect args.
+	 */
 	pt_walk_range(&range, __collect_tables, &collect);
 
 	iommu_unpreserve_pages_list(&collect.free_list);
@@ -987,6 +992,11 @@ static int NS(preserve)(struct pt_iommu *iommu_table, struct iommu_domain_ser *s
 	int ret;
 
 	iommu_pages_list_add(&collect.free_list, range.top_table);
+
+	/*
+	 * pt_walk_range() will never fail as check_mapped is not set in the
+	 * collect args.
+	 */
 	pt_walk_range(&range, __collect_tables, &collect);
 
 	ret = iommu_preserve_pages_list(&collect.free_list);

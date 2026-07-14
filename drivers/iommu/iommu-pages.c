@@ -156,6 +156,9 @@ EXPORT_SYMBOL_GPL(iommu_unpreserve_pages);
  */
 int iommu_preserve_pages(void *virt)
 {
+	if (!kho_is_enabled())
+		return -EOPNOTSUPP;
+
 	return kho_preserve_folio(ioptdesc_folio(virt_to_ioptdesc(virt)));
 }
 EXPORT_SYMBOL_GPL(iommu_preserve_pages);
@@ -213,6 +216,9 @@ int iommu_preserve_pages_list(struct iommu_pages_list *list)
 {
 	struct ioptdesc *iopt;
 	int ret;
+
+	if (!kho_is_enabled())
+		return -EOPNOTSUPP;
 
 	list_for_each_entry(iopt, &list->pages, iopt_freelist_elm) {
 		ret = kho_preserve_folio(ioptdesc_folio(iopt));
