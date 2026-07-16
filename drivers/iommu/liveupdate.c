@@ -268,8 +268,10 @@ int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 	if (ret)
 		return -ENOENT;
 
-	if (!flb_obj->ser->device_array_phys)
-		return -ENOENT;
+	if (!flb_obj->ser->device_array_phys) {
+		ret = -ENOENT;
+		goto out;
+	}
 
 	array = phys_to_virt(flb_obj->ser->device_array_phys);
 	iommu_liveupdate_for_each_arr(array) {
@@ -309,14 +311,18 @@ struct iommu_device_ser *iommu_get_device_preserved_data(struct device *dev)
 	if (ret)
 		return ERR_PTR(ret);
 
-	if (!flb_obj->ser->device_array_phys)
-		return NULL;
+	if (!flb_obj->ser->device_array_phys) {
+		device_ser = NULL;
+		goto out;
+	}
 
 	array = phys_to_virt(flb_obj->ser->device_array_phys);
-	iommu_liveupdate_for_each_obj(array, device_ser, idx) {
-		if (match_device_ser(device_ser, to_pci_dev(dev))) {
-			device_ser->hdr.flags |= IOMMU_SER_FLAG_INCOMING;
-			goto out;
+	iommu_liveupdate_for_each_arr(array) {
+		iommu_liveupdate_for_each_obj(array, device_ser, idx) {
+			if (match_device_ser(device_ser, to_pci_dev(dev))) {
+				device_ser->hdr.flags |= IOMMU_SER_FLAG_INCOMING;
+				goto out;
+			}
 		}
 	}
 

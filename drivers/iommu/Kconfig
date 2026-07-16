@@ -406,7 +406,7 @@ config IOMMU_DEBUG_PAGEALLOC
 
 config IOMMU_LIVEUPDATE
 	bool "IOMMU live update state preservation support"
-	depends on LIVEUPDATE && IOMMUFD
+	depends on LIVEUPDATE && IOMMUFD && 64BIT
 	help
 	  Enable support for preserving IOMMU state across a kexec live update.
 
