@@ -100,17 +100,33 @@ static void clear_unpreserved_context_root_entries(struct intel_iommu *iommu,
 }
 
 static int clear_unpreserve_context_entry_fn(struct device *dev,
-					     struct iommu_device *iommu,
+					     struct iommu_device *iommu_dev,
 					     void *arg)
 {
 	struct device_domain_info *info;
+	struct context_entry *context;
 
 	info = dev_iommu_priv_get(dev);
 	if (!info)
 		return 0;
 
-	if (dev_is_pci(dev) && dev_iommu_preserved_state(dev))
+	/*
+	 * PRI use cases are not supported with Live Update and a preservation
+	 * attempt on such domains returns an error. But Intel IOMMU driver
+	 * enables PRI by default on all devices that support it. For preserved
+	 * entries, the PRI needs to be disabled so preserved PCI devices do not
+	 * generate PRQ requests, during kexec, as translations are kept enabled
+	 * during live update. There is no need to disable these for DMA
+	 * aliases.
+	 */
+	if (dev_is_pci(dev) && dev_iommu_preserved_state(dev)) {
+		context = iommu_context_addr(info->iommu, info->bus, info->devfn, 0);
+		if (context) {
+			context_set_fault_disable(context);
+			__iommu_flush_cache(info->iommu, context, sizeof(*context));
+		}
 		return 0;
+	}
 
 	domain_context_clear(info);
 	return 0;
@@ -409,6 +425,7 @@ int intel_iommu_preserve_device(struct device *dev,
 
 	device_ser->intel.pasid_table = virt_to_phys(pasid_table->table);
 	device_ser->intel.max_pasid = pasid_table->max_pasid;
+
 	return 0;
 }
 

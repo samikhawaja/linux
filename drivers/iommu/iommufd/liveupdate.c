@@ -52,6 +52,11 @@ int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 	mutex_lock(&ictx->liveupdate_mutex);
 
 	xa_lock(&ictx->objects);
+
+	/* PRI use cases are not supported. */
+	if (hwpt_target->common.fault)
+		return -EOPNOTSUPP;
+
 	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
 		if (WARN_ON_ONCE(obj->type != IOMMUFD_OBJ_HWPT_PAGING))
 			continue;
