@@ -70,7 +70,7 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 					  void **owner);
 int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 				    void *arg);
-struct iommu_device_ser *iommu_get_device_preserved_data(struct device *dev);
+int iommu_init_device_preserved_data(struct device *dev);
 struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser type);
 int iommu_preserve_domain(struct iommu_domain *domain, struct iommu_domain_ser **ser);
 void iommu_unpreserve_domain(struct iommu_domain *domain);
@@ -113,6 +113,11 @@ static inline struct iommu_domain *iommu_restore_domain(struct device *dev,
 static inline int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn, void *arg)
 {
 	return -EOPNOTSUPP;
+}
+
+static inline int iommu_init_device_preserved_data(struct device *dev)
+{
+	return 0;
 }
 
 static inline struct iommu_device_ser *iommu_get_device_preserved_data(struct device *dev)
