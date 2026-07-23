@@ -91,6 +91,15 @@
  *    again later. If the issue cannot be resolved, these resources will be held
  *    by LUO until the next live update cycle, at which point they will be
  *    discarded.
+ *
+ * Dependencies:
+ *
+ * File Descriptors may have dependencies that also
+ * need to be preserved during live update. File Handler may resolve these
+ * dependencies by fetching the token of the dependency so it can be used to fetch
+ * the dependency during retrieve in the next kernel. Some of these dependencies
+ * can be resolved during FH freeze(), but some of these might need resolution
+ * during FH preserve() due to immutability, security and performance concerns.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
