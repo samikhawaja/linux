@@ -141,7 +141,12 @@ void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 
 	};
 
-	/* Clear context entries for unpreserved devices */
+	/*
+	 * Clear context entries for unpreserved devices.
+	 *
+	 * Note that the error can be ignored as the iterator function does not
+	 * fail.
+	 */
 	iommu_for_each_dev(&iter);
 
 	/* Clear reference to unpreserved context tables */
