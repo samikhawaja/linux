@@ -248,7 +248,7 @@ static int _restore_used_domain_ids(struct iommu_device_ser *ser, void *arg)
 	struct intel_iommu *iommu = arg;
 
 	if (WARN_ON(!ser->domain_iommu_ser.iommu_phys))
-		return -ENOENT;
+		return 0;
 
 	iommu_hw_ser = phys_to_virt(ser->domain_iommu_ser.iommu_phys);
 	if (iommu_hw_ser->type != IOMMU_INTEL)
