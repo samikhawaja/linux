@@ -1723,7 +1723,7 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 				    preserved_state);
 
 	if (!ret)
-		igroup->liveupdate_preserved = true;
+		igroup->nr_liveupdate_preserved++;
 out:
 	mutex_unlock(&igroup->lock);
 	return ret;
@@ -1742,7 +1742,6 @@ void iommufd_device_unpreserve(struct liveupdate_session *s,
 	attach = xa_load(&igroup->pasid_attach, IOMMU_NO_PASID);
 	if (!attach) {
 		WARN(1, "IOMMU_NO_PASID attachment not found");
-		igroup->liveupdate_preserved = false;
 		goto out;
 	}
 
@@ -1750,12 +1749,11 @@ void iommufd_device_unpreserve(struct liveupdate_session *s,
 	hwpt_paging = find_hwpt_paging(hwpt);
 	if (!hwpt_paging || !hwpt_paging->liveupdate_preserved) {
 		WARN(1, "Attached domain is not preserved");
-		igroup->liveupdate_preserved = false;
 		goto out;
 	}
 
 	iommu_unpreserve_device(hwpt_paging->common.domain, idev->dev);
-	igroup->liveupdate_preserved = false;
+	igroup->nr_liveupdate_preserved--;
 out:
 	mutex_unlock(&igroup->lock);
 }
@@ -1763,7 +1761,7 @@ EXPORT_SYMBOL_NS_GPL(iommufd_device_unpreserve, "IOMMUFD");
 
 bool iommufd_device_is_preserved(struct iommufd_device *idev)
 {
-	return idev && idev->igroup && idev->igroup->liveupdate_preserved;
+	return idev && idev->igroup && idev->igroup->nr_liveupdate_preserved;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_is_preserved, "IOMMUFD");
 #endif
