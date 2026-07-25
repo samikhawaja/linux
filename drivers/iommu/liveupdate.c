@@ -563,7 +563,8 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	if (!dev_is_pci(dev))
 		return -EOPNOTSUPP;
 
-	if (!iommu_group_dma_owner_claimed(dev->iommu_group))
+	if (!dev->iommu_group ||
+	    !iommu_group_dma_owner_claimed(dev->iommu_group))
 		return -EINVAL;
 
 	pdev = to_pci_dev(dev);
@@ -626,7 +627,8 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 	if (!dev_is_pci(dev))
 		return;
 
-	if (!iommu_group_dma_owner_claimed(dev->iommu_group))
+	if (!dev->iommu_group ||
+	    !iommu_group_dma_owner_claimed(dev->iommu_group))
 		return;
 
 	iommu = dev->iommu;
