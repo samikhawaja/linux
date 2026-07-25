@@ -99,37 +99,73 @@ static void clear_unpreserved_context_root_entries(struct intel_iommu *iommu,
 	}
 }
 
-static int clear_unpreserve_context_entry_fn(struct device *dev,
-					     struct iommu_device *iommu_dev,
-					     void *arg)
+static void clear_unpreserved_context(struct device_domain_info *info, u8 bus, u8 devfn)
 {
-	struct device_domain_info *info;
-	struct context_entry *context;
-
-	info = dev_iommu_priv_get(dev);
-	if (!info)
-		return 0;
+        struct context_entry *context;
 
 	/*
-	 * PRI use cases are not supported with Live Update and a preservation
-	 * attempt on such domains returns an error. But Intel IOMMU driver
-	 * enables PRI by default on all devices that support it. For preserved
-	 * entries, the PRI needs to be disabled so preserved PCI devices do not
-	 * generate PRQ requests, during kexec, as translations are kept enabled
-	 * during live update. There is no need to disable these for DMA
-	 * aliases.
+	 * This cleanup is done during shutdown, so it should be fine to only
+	 * clear the entries here and issue one global invalidation later to
+	 * invalidate all cleared entries.
+	 *
+	 * Note that the device IOTLB invalidation for unpreserved devices is
+	 * skipped this way, but that should not be needed as the device are
+	 * quescued at this point. This should improve the performance of the
+	 * cleanup process and avoids any invalidation timeouts because drivers
+	 * might have moved devices to D3 state.
 	 */
-	if (dev_is_pci(dev) && dev_iommu_preserved_state(dev)) {
-		context = iommu_context_addr(info->iommu, info->bus, info->devfn, 0);
-		if (context) {
-			context_set_fault_disable(context);
-			__iommu_flush_cache(info->iommu, context, sizeof(*context));
-		}
-		return 0;
-	}
+        context = iommu_context_addr(info->iommu, bus, devfn, 0);
+        if (context) {
+                context_clear_entry(context);
+                __iommu_flush_cache(info->iommu, context, sizeof(*context));
+        }
+}
 
-	domain_context_clear(info);
-	return 0;
+static int clear_unpreserved_alias_cb(struct pci_dev *pdev, u16 alias, void *data)
+{
+        struct device_domain_info *info = data;
+
+        clear_unpreserved_context(info, PCI_BUS_NUM(alias), alias & 0xff);
+        return 0;
+}
+
+static int clear_unpreserve_context_entry_fn(struct device *dev,
+                                             struct iommu_device *iommu_dev,
+                                             void *arg)
+{
+        struct device_domain_info *info;
+        struct context_entry *context;
+
+        info = dev_iommu_priv_get(dev);
+        if (!info)
+                return 0;
+
+        /*
+         * PRI use cases are not supported with Live Update and a preservation
+         * attempt on such domains returns an error. But Intel IOMMU driver
+         * enables PRI by default on all devices that support it. For preserved
+         * entries, the PRI needs to be disabled so preserved PCI devices do not
+         * generate PRQ requests, during kexec, as translations are kept enabled
+         * during live update. There is no need to disable these for DMA
+         * aliases.
+         */
+        if (dev_is_pci(dev) && dev_iommu_preserved_state(dev)) {
+                context = iommu_context_addr(info->iommu, info->bus, info->devfn, 0);
+                if (context) {
+                        context_set_fault_disable(context);
+                        __iommu_flush_cache(info->iommu, context, sizeof(*context));
+                }
+                return 0;
+        }
+
+        if (dev_is_pci(dev)) {
+                pci_for_each_dma_alias(to_pci_dev(dev),
+                                       clear_unpreserved_alias_cb, info);
+        } else {
+                clear_unpreserved_context(info, info->bus, info->devfn);
+        }
+
+        return 0;
 }
 
 void clear_unpreserved_context_entries(struct intel_iommu *iommu)
@@ -156,9 +192,9 @@ void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 	/*
 	 * Some devices might not have teardown/detached properly depending on
 	 * whether a proper device remove is done before kexec is triggered.
-	 * Also unpreserved context tables are removed during shutdown. So issue
-	 * global invalidations to remove references to unpreserved tables and
-	 * entries.
+	 * Also unpreserved context tables and entries are removed during
+	 * shutdown. So issue global invalidations to remove references to
+	 * unpreserved tables and entries.
 	 */
 	iommu->flush.flush_context(iommu, 0, 0, 0, DMA_CCMD_GLOBAL_INVL);
 	if (sm_supported(iommu))
