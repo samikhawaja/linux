@@ -1074,8 +1074,12 @@ static int NS(restore)(struct pt_iommu *iommu_table, struct iommu_domain_ser *se
 	/*
 	 * It is safe to override this here since this domain is immutable and
 	 * can only be freed.
+	 *
+	 * Note that the FMT specific bits are not cleared as they might be
+	 * set/preserved/restored by the driver to handle special cases that are
+	 * required for page walks.
 	 */
-	common->features = 0;
+	common->features &= ~GENMASK(PT_FEAT_FMT_START - 1, 0);
 	if (ser->sign_extend)
 		common->features |= BIT(PT_FEAT_SIGN_EXTEND);
 
