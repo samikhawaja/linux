@@ -410,7 +410,13 @@ int iommu_preserve_domain(struct iommu_domain *domain, struct iommu_domain_ser *
 	if (ret)
 		return ret;
 
+	if (!flb_obj)
+		return -EINVAL;
+
 	guard(mutex)(&flb_obj->lock);
+	if (domain->preserved_state)
+		return -EBUSY;
+
 	domain_ser = alloc_iommu_domain_ser(flb_obj);
 	if (IS_ERR(domain_ser))
 		return PTR_ERR(domain_ser);
@@ -437,12 +443,14 @@ void iommu_unpreserve_domain(struct iommu_domain *domain)
 	if (WARN_ON(!pt || !pt->ops->unpreserve))
 		return;
 
+	if (!domain->preserved_state)
+		return;
+
 	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
-	if (WARN_ON(ret))
+	if (WARN_ON(ret) || !flb_obj)
 		return;
 
 	guard(mutex)(&flb_obj->lock);
-
 	if (!domain->preserved_state)
 		return;
 
