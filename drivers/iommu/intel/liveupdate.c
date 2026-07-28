@@ -315,7 +315,7 @@ void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 		restore_iommu_context(iommu);
 
 	iommu_ser->intel.restored = 1;
-	iommu_for_each_preserved_device(_restore_used_domain_ids, iommu);
+	BUG_ON(iommu_for_each_preserved_device(_restore_used_domain_ids, iommu));
 }
 
 int intel_iommu_domain_reattach_iommu(struct dmar_domain *domain,

@@ -449,6 +449,8 @@ static void test_restore_free(struct kunit *test)
 	 * zeroed. Also set max_vasz_lg2 as done by the actual restore()
 	 * function.
 	 */
+	top_range = pt_top_range(priv->common);
+	priv->common->max_vasz_lg2 = top_range.max_vasz_lg2;
 	priv->common->features &= BIT(PT_FEAT_SIGN_EXTEND);
 	priv->common->max_vasz_lg2 = top_range.max_vasz_lg2;
 
