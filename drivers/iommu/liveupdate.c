@@ -294,7 +294,7 @@ static inline bool match_device_ser(struct iommu_device_ser *match,
 	return match->devid == pci_dev_id(pdev) && match->pci_domain_nr == pci_domain_nr(pdev->bus);
 }
 
-struct iommu_device_ser *iommu_get_device_preserved_data(struct device *dev)
+int iommu_init_device_preserved_data(struct device *dev)
 {
 	struct iommu_device_ser *device_ser = NULL;
 	struct iommu_device_array_ser *array;
@@ -302,32 +302,35 @@ struct iommu_device_ser *iommu_get_device_preserved_data(struct device *dev)
 	int ret, idx;
 
 	if (!dev_is_pci(dev))
-		return NULL;
+		return 0;
 
 	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&flb_obj);
 	if (ret == -ENODATA || ret == -ENOENT)
-		return NULL;
+		return 0;
 
 	if (ret)
-		return ERR_PTR(ret);
+		return ret;
 
 	if (!flb_obj->ser->device_array_phys)
-		return NULL;
+		goto out;
 
 	array = phys_to_virt(flb_obj->ser->device_array_phys);
-	iommu_liveupdate_for_each_obj(array, device_ser, idx) {
-		if (match_device_ser(device_ser, to_pci_dev(dev))) {
-			device_ser->hdr.flags |= IOMMU_SER_FLAG_INCOMING;
-			goto out;
+	iommu_liveupdate_for_each_arr(array) {
+		iommu_liveupdate_for_each_obj(array, device_ser, idx) {
+			if (match_device_ser(device_ser, to_pci_dev(dev))) {
+				device_ser->hdr.flags |= IOMMU_SER_FLAG_INCOMING;
+				goto out;
+			}
 		}
 	}
 
 	device_ser = NULL;
 out:
+	dev->iommu->device_ser = device_ser;
 	liveupdate_flb_put_incoming(&iommu_flb);
-	return device_ser;
+	return 0;
 }
-EXPORT_SYMBOL(iommu_get_device_preserved_data);
+EXPORT_SYMBOL(iommu_init_device_preserved_data);
 
 struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser type)
 {
@@ -667,11 +670,13 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 	if (ret)
 		return ERR_PTR(ret);
 
-	guard(mutex)(&flb_obj->lock);
+	mutex_lock(&flb_obj->lock);
 
 	/* Preserved device should have a preserved domain */
-	if (!ser->domain_iommu_ser.domain_phys)
-		return ERR_PTR(-EINVAL);
+	if (!ser->domain_iommu_ser.domain_phys) {
+		domain = ERR_PTR(-EINVAL);
+		goto out;
+	}
 
 	domain_ser = phys_to_virt(ser->domain_iommu_ser.domain_phys);
 	if (domain_ser->restored_domain) {
@@ -705,6 +710,7 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 	domain_ser->restored_domain = domain;
 
 out:
+	mutex_unlock(&flb_obj->lock);
 	liveupdate_flb_put_incoming(&iommu_flb);
 	return domain;
 }
