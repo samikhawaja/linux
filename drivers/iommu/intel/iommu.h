@@ -924,6 +924,15 @@ static inline void context_set_fault_enable(struct context_entry *context)
 	context->lo &= (((u64)-1) << 2) | 1;
 }
 
+static inline void context_set_fault_disable(struct context_entry *context)
+{
+	u64 val;
+
+	val = READ_ONCE(context->lo) | 2ULL;
+	WRITE_ONCE(context->lo, val);
+	dma_wmb();
+}
+
 static inline void context_set_translation_type(struct context_entry *context,
 						unsigned long value)
 {
