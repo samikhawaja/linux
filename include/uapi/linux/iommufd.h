@@ -1369,7 +1369,7 @@ struct iommu_hw_queue_alloc {
 struct iommu_hwpt_liveupdate_mark_preserve {
 	__u32 size;
 	__u32 hwpt_id;
-	__u64 hwpt_token;
+	__aligned_u64 hwpt_token;
 };
 #define IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE _IO(IOMMUFD_TYPE, IOMMUFD_CMD_HWPT_LU_MARK_PRESERVE)
 

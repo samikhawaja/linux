@@ -43,6 +43,7 @@ int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 	struct iommufd_ctx *ictx = ucmd->ictx;
 	struct iommufd_object *obj;
 	unsigned long index;
+	bool marked = false;
 	int rc = 0;
 
 	hwpt_target = iommufd_get_hwpt_paging(ucmd, cmd->hwpt_id);
@@ -52,12 +53,26 @@ int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 	mutex_lock(&ictx->liveupdate_mutex);
 
 	xa_lock(&ictx->objects);
+
+	/* PRI use cases are not supported. */
+	if (hwpt_target->common.fault) {
+		rc = -EOPNOTSUPP;
+		goto out_unlock;
+	}
+
 	xa_for_each_marked(&ictx->objects, index, obj, IOMMUFD_OBJ_LIVEUPDATE_MARK) {
 		if (WARN_ON_ONCE(obj->type != IOMMUFD_OBJ_HWPT_PAGING))
 			continue;
 
 		hwpt_paging = to_hwpt_paging(container_of(obj, struct iommufd_hw_pagetable, obj));
+
+		if (hwpt_paging == hwpt_target)
+			marked = true;
+
 		if (hwpt_paging->liveupdate_token == cmd->hwpt_token) {
+			if (hwpt_paging == hwpt_target)
+				goto out_unlock;
+
 			rc = -EADDRINUSE;
 			goto out_unlock;
 		}
@@ -65,7 +80,7 @@ int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
 
 	__xa_set_mark(&ictx->objects, hwpt_target->common.obj.id, IOMMUFD_OBJ_LIVEUPDATE_MARK);
 
-	if (hwpt_target->liveupdate_token != 0)
+	if (marked)
 		pr_warn_ratelimited("Overwriting HWPT liveupdate token from: %llu to %llu\n",
 				    hwpt_target->liveupdate_token, cmd->hwpt_token);
 	hwpt_target->liveupdate_token = cmd->hwpt_token;
