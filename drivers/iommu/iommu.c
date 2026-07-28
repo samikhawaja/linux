@@ -318,11 +318,18 @@ static int _iommu_for_each_dev_cb(struct device *dev, void *data)
 	return 0;
 }
 
-void iommu_for_each_dev(struct iommu_dev_iter *iter)
+int iommu_for_each_dev(struct iommu_dev_iter *iter)
 {
-	for (int i = 0; i < ARRAY_SIZE(iommu_buses); i++)
-		bus_for_each_dev(iommu_buses[i], NULL, iter,
-				 _iommu_for_each_dev_cb);
+	int ret;
+
+	for (int i = 0; i < ARRAY_SIZE(iommu_buses); i++) {
+		ret = bus_for_each_dev(iommu_buses[i], NULL, iter,
+				       _iommu_for_each_dev_cb);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(iommu_for_each_dev);
 

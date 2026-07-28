@@ -1209,7 +1209,7 @@ struct iommu_dev_iter {
 	void *arg;
 };
 
-void iommu_for_each_dev(struct iommu_dev_iter *iter);
+int iommu_for_each_dev(struct iommu_dev_iter *iter);
 
 extern struct mutex iommu_probe_device_lock;
 int iommu_probe_device(struct device *dev);

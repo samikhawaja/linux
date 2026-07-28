@@ -558,7 +558,8 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	if (!dev_is_pci(dev))
 		return -EOPNOTSUPP;
 
-	if (!iommu_group_dma_owner_claimed(dev->iommu_group))
+	if (!dev->iommu_group ||
+	    !iommu_group_dma_owner_claimed(dev->iommu_group))
 		return -EINVAL;
 
 	pdev = to_pci_dev(dev);
@@ -573,8 +574,14 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	if (ret)
 		return ret;
 
+	if (!flb_obj)
+		return -EINVAL;
+
 	guard(mutex)(&flb_obj->lock);
 	if (!domain->preserved_state)
+		return -EINVAL;
+
+	if (iommu->device_ser)
 		return -EINVAL;
 
 	device_ser = alloc_iommu_device_ser(flb_obj);
@@ -615,7 +622,8 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 	if (!dev_is_pci(dev))
 		return;
 
-	if (!iommu_group_dma_owner_claimed(dev->iommu_group))
+	if (!dev->iommu_group ||
+	    !iommu_group_dma_owner_claimed(dev->iommu_group))
 		return;
 
 	iommu = dev->iommu;
@@ -623,8 +631,11 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 		    !iommu->iommu_dev->ops->unpreserve))
 		return;
 
+	if (!dev_iommu_preserved_state(dev))
+		return;
+
 	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
-	if (WARN_ON(ret))
+	if (WARN_ON(ret) || !flb_obj)
 		return;
 
 	guard(mutex)(&flb_obj->lock);
