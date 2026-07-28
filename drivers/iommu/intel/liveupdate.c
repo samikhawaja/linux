@@ -53,6 +53,12 @@ static int preserve_context_table(struct intel_iommu *iommu,
 	spin_lock(&iommu->lock);
 	context = iommu_context_addr(iommu, bus, devfn, 0);
 	spin_unlock(&iommu->lock);
+
+	/*
+	 * Intel IOMMU context tables are never freed by the driver once
+	 * allocated. It is safe to access the context pointer outside of the
+	 * iommu->lock.
+	 */
 	if (context && !is_context_table_preserved(iommu, ser, bus, devfn)) {
 		ret = iommu_preserve_pages(context);
 		if (ret)
