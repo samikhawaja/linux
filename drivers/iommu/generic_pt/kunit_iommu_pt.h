@@ -443,12 +443,14 @@ static void test_restore_free(struct kunit *test)
 	do_map(test, start, start, len);
 
 	/*
-	 * Simulate a restored state by clearing all features except
-	 * SIGN_EXTEND. This verifies that the generic page table free walker
-	 * can correctly tear down a populated domain when other features are
-	 * zeroed.
+	 * Simulate a restored state by clearing all features except SIGN_EXTEND
+	 * and DMA_INCOHERENT. This verifies that the generic page table free
+	 * walker can correctly tear down a populated domain when other features
+	 * are zeroed. Also set max_vasz_lg2 as done by the actual restore()
+	 * function.
 	 */
-	priv->common->features &= BIT(PT_FEAT_SIGN_EXTEND);
+	priv->common->features &= (BIT(PT_FEAT_SIGN_EXTEND) | BIT(PT_FEAT_DMA_INCOHERENT));
+	priv->common->max_vasz_lg2 = top_range.max_vasz_lg2;
 
 	/* The domain will be freed when the test exits. */
 }
