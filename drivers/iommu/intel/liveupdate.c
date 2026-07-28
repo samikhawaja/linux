@@ -329,6 +329,9 @@ int intel_iommu_domain_reattach_iommu(struct dmar_domain *domain,
 	if (domain->domain.type == IOMMU_DOMAIN_SVA)
 		return 0;
 
+	if (!iommu_domain_restored_state(&domain->domain))
+		return -EINVAL;
+
 	restored_did = device_ser->domain_iommu_ser.attachment_id;
 	if (!ida_exists(&iommu->domain_ida, restored_did))
 		return -EINVAL;
