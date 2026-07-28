@@ -284,7 +284,7 @@ static int _restore_used_domain_ids(struct iommu_device_ser *ser, void *arg)
 	struct intel_iommu *iommu = arg;
 
 	if (WARN_ON(!ser->domain_iommu_ser.iommu_phys))
-		return -ENOENT;
+		return 0;
 
 	iommu_hw_ser = phys_to_virt(ser->domain_iommu_ser.iommu_phys);
 	if (iommu_hw_ser->type != IOMMU_INTEL)
@@ -315,7 +315,7 @@ void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 		restore_iommu_context(iommu);
 
 	iommu_ser->intel.restored = 1;
-	iommu_for_each_preserved_device(_restore_used_domain_ids, iommu);
+	BUG_ON(iommu_for_each_preserved_device(_restore_used_domain_ids, iommu));
 }
 
 int intel_iommu_domain_reattach_iommu(struct dmar_domain *domain,

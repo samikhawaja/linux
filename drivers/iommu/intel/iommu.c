@@ -1626,7 +1626,18 @@ static int __init init_dmars(void)
 	int ret;
 
 	for_each_iommu(iommu, drhd) {
+		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
+		if (iommu_ser && IS_ERR(iommu_ser)) {
+			ret = PTR_ERR(iommu_ser);
+			goto free_iommu;
+		}
+
 		if (drhd->ignored) {
+			if (WARN_ON(iommu_ser)) {
+				ret = -EINVAL;
+				goto free_iommu;
+			}
+
 			iommu_disable_translation(iommu);
 			continue;
 		}
@@ -1641,12 +1652,6 @@ static int __init init_dmars(void)
 
 			intel_pasid_max_id = min_t(u32, temp,
 						   intel_pasid_max_id);
-		}
-
-		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
-		if (iommu_ser && IS_ERR(iommu_ser)) {
-			ret = PTR_ERR(iommu_ser);
-			goto free_iommu;
 		}
 
 		intel_iommu_init_qi(iommu);
@@ -2152,6 +2157,9 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 		iommu_disable_translation(iommu);
 
 	if (iommu_ser) {
+		if (WARN_ON(dmaru->ignored))
+			return -EINVAL;
+
 		intel_iommu_liveupdate_restore_root_table(iommu, iommu_ser);
 	} else {
 		ret = iommu_alloc_root_entry(iommu);
