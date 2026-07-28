@@ -271,7 +271,11 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 			goto out_unpreserve;
 		}
 
-		/* Mark as preserved */
+		/*
+		 * Mark the HWPT as successfully preserved. This is distinct
+		 * from IOMMUFD_OBJ_LIVEUPDATE_MARK, which only indicates the
+		 * userspace intent to preserve.
+		 */
 		hwpt->liveupdate_preserved = true;
 		xa_lock(&ictx->objects);
 	}
