@@ -421,8 +421,8 @@ err:
 	if (op != PASID_LU_OP_PRESERVE)
 		return ret;
 
-	for (; i >= 0; i--) {
-		table = get_pasid_table_from_pde(&dir[i]);
+	while (i > 0) {
+		table = get_pasid_table_from_pde(&dir[--i]);
 		if (!table)
 			continue;
 
@@ -527,7 +527,7 @@ void intel_iommu_unpreserve(struct iommu_device *iommu_dev,
 	iommu_unpreserve_pages(iommu->root_entry);
 }
 
-void *intel_pasid_try_restore_table(struct device *dev, u64 max_pasid)
+void *intel_pasid_restore_table(struct device *dev, u64 max_pasid)
 {
 	struct iommu_device_ser *ser = dev_iommu_restored_state(dev);
 
@@ -537,7 +537,11 @@ void *intel_pasid_try_restore_table(struct device *dev, u64 max_pasid)
 	BUG_ON(pasid_lu_handle_pd(phys_to_virt(ser->intel.pasid_table),
 				  ser->intel.max_pasid,
 				  PASID_LU_OP_RESTORE));
-	BUG_ON(ser->intel.max_pasid < max_pasid);
+	/*
+	 * MAX PASID of a device should not change as it is read from
+	 * capabilities.
+	 */
+	BUG_ON(ser->intel.max_pasid != max_pasid);
 
 	return phys_to_virt(ser->intel.pasid_table);
 }
