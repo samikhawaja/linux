@@ -268,8 +268,10 @@ int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 	if (ret)
 		return -ENOENT;
 
-	if (!flb_obj->ser->device_array_phys)
-		return -ENOENT;
+	if (!flb_obj->ser->device_array_phys) {
+		ret = -ENOENT;
+		goto out;
+	}
 
 	array = phys_to_virt(flb_obj->ser->device_array_phys);
 	iommu_liveupdate_for_each_arr(array) {
