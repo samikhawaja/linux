@@ -2184,12 +2184,6 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 	if (ret)
 		return ret;
 
-#ifdef CONFIG_IOMMU_LIVEUPDATE
-	/* The associated state can be unset once restored. */
-	if (dev_iommu_restored_state(dev))
-		WRITE_ONCE(dev->iommu->device_ser, NULL);
-#endif
-
 	dev->iommu->attach_deferred = 0;
 	trace_attach_device_to_domain(dev);
 	return 0;
@@ -3156,25 +3150,37 @@ static inline void *__iommu_group_restored_state(struct iommu_group *group)
 	return dev_iommu_restored_state(dev);
 }
 
-static struct iommu_domain *__iommu_group_restore_domain(struct iommu_group *group)
+static int __iommu_group_restore_domain(struct iommu_group *group)
 {
 	struct iommu_device_ser *device_ser;
 	struct iommu_domain *domain;
 	struct device *dev;
 	void *owner;
+	int ret;
 
 	lockdep_assert_held(&group->mutex);
+	if (group->domain)
+		return -EBUSY;
+
 	dev = iommu_group_first_dev(group);
 	if (!dev_is_pci(dev))
-		return NULL;
+		return -EINVAL;
 
 	device_ser = dev_iommu_restored_state(dev);
 	if (!device_ser)
-		return NULL;
+		return -ENOENT;
 
 	domain = iommu_restore_domain(dev, device_ser, &owner);
 	if (WARN_ON(IS_ERR(domain)))
-		return NULL;
+		return PTR_ERR(domain);
+
+	/*
+	 * The restored domain is associated with the restored state and should
+	 * not be freed.
+	 */
+	ret = __iommu_group_set_domain(group, domain);
+	if (ret)
+		return ret;
 
 	/*
 	 * Ownership of groups with preserved devices is set during boot. These
@@ -3183,7 +3189,7 @@ static struct iommu_domain *__iommu_group_restore_domain(struct iommu_group *gro
 	WARN_ON(group->owner);
 	group->owner = owner;
 	group->owner_cnt = 1;
-	return domain;
+	return ret;
 }
 
 /**
@@ -3200,8 +3206,8 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 				      int target_type)
 {
 	struct iommu_domain *old_dom = group->default_domain;
-	struct iommu_domain *dom, *restored_domain;
 	struct group_device *gdev;
+	struct iommu_domain *dom;
 	bool direct_failed;
 	int req_type;
 	int ret;
@@ -3244,11 +3250,17 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 
 	/* We must set default_domain early for __iommu_device_set_domain */
 	group->default_domain = dom;
+
+	/* Preserved devices need to be attached to the restore domain */
+	if (__iommu_group_restored_state(group)) {
+		ret = __iommu_group_restore_domain(group);
+		if (ret)
+			goto err_restore_def_domain;
+
+		goto out_free_old;
+	}
+
 	if (!group->domain) {
-		if (__iommu_group_restored_state(group))
-			restored_domain = __iommu_group_restore_domain(group);
-		else
-			restored_domain = dom;
 		/*
 		 * Drivers are not allowed to fail the first domain attach.
 		 * The only way to recover from this is to fail attaching the
@@ -3256,7 +3268,7 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 		 * in group->default_domain so it is freed after.
 		 */
 		ret = __iommu_group_set_domain_internal(
-			group, restored_domain, IOMMU_SET_DOMAIN_MUST_SUCCEED);
+			group, dom, IOMMU_SET_DOMAIN_MUST_SUCCEED);
 		if (WARN_ON(ret))
 			goto out_free_old;
 	} else {
