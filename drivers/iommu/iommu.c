@@ -137,6 +137,7 @@ static void __iommu_group_set_domain_nofail(struct iommu_group *group,
 	WARN_ON(__iommu_group_set_domain_internal(
 		group, new_domain, IOMMU_SET_DOMAIN_MUST_SUCCEED));
 }
+static int __iommu_group_alloc_blocking_domain(struct iommu_group *group);
 
 static int iommu_setup_default_domain(struct iommu_group *group,
 				      int target_type);
@@ -3170,14 +3171,15 @@ static int __iommu_group_restore_domain(struct iommu_group *group)
 	if (!device_ser)
 		return -ENOENT;
 
+	ret = __iommu_group_alloc_blocking_domain(group);
+	if (ret)
+		return ret;
+
 	domain = iommu_restore_domain(dev, device_ser, &owner);
 	if (WARN_ON(IS_ERR(domain)))
 		return PTR_ERR(domain);
 
-	/*
-	 * The restored domain is associated with the restored state and should
-	 * not be freed.
-	 */
+	/* The restored domain is attached with the restored device. */
 	ret = __iommu_group_set_domain(group, domain);
 	if (ret)
 		return ret;
