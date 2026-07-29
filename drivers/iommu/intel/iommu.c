@@ -1830,6 +1830,9 @@ static int iommu_suspend(void *data)
 	struct intel_iommu *iommu = NULL;
 	unsigned long flag;
 
+	if (iommu_preserved_state(&iommu->iommu))
+		return -EBUSY;
+
 	iommu_flush_all();
 
 	for_each_active_iommu(iommu, drhd) {
