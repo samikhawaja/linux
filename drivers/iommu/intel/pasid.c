@@ -98,6 +98,10 @@ void intel_pasid_free_table(struct device *dev)
 	pasid_table = info->pasid_table;
 	info->pasid_table = NULL;
 
+	/* Do not free the restored pasid tables if device is not reclaimed */
+	if (dev_iommu_restored_state(dev))
+		goto out;
+
 	/* Free scalable mode PASID directory tables: */
 	dir = pasid_table->table;
 	max_pde = pasid_table->max_pasid >> PASID_PDE_SHIFT;
@@ -107,6 +111,8 @@ void intel_pasid_free_table(struct device *dev)
 	}
 
 	iommu_free_pages(pasid_table->table);
+
+out:
 	kfree(pasid_table);
 }
 
