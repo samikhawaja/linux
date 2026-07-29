@@ -291,7 +291,9 @@ EXPORT_SYMBOL(iommu_for_each_preserved_device);
 static inline bool match_device_ser(struct iommu_device_ser *match,
 				    struct pci_dev *pdev)
 {
-	return match->devid == pci_dev_id(pdev) && match->pci_domain_nr == pci_domain_nr(pdev->bus);
+	return match->devid == pci_dev_id(pdev) &&
+			match->pci_domain_nr == pci_domain_nr(pdev->bus) &&
+			!(match->hdr.flags & IOMMU_SER_FLAG_INCOMING);
 }
 
 int iommu_init_device_preserved_data(struct device *dev)

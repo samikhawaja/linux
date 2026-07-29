@@ -535,19 +535,14 @@ void *intel_pasid_restore_table(struct device *dev, u64 max_pasid)
 	if (!ser || !ser->intel.pasid_table)
 		return NULL;
 
+	BUG_ON(pasid_lu_handle_pd(phys_to_virt(ser->intel.pasid_table),
+				  ser->intel.max_pasid,
+				  PASID_LU_OP_RESTORE));
 	/*
 	 * MAX PASID of a device should not change as it is read from
 	 * capabilities.
 	 */
 	BUG_ON(ser->intel.max_pasid != max_pasid);
-	if (ser->intel.restored)
-		goto out;
 
-	BUG_ON(pasid_lu_handle_pd(phys_to_virt(ser->intel.pasid_table),
-				  ser->intel.max_pasid,
-				  PASID_LU_OP_RESTORE));
-	ser->intel.restored = 1;
-
-out:
 	return phys_to_virt(ser->intel.pasid_table);
 }

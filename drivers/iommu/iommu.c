@@ -137,6 +137,8 @@ static void __iommu_group_set_domain_nofail(struct iommu_group *group,
 	WARN_ON(__iommu_group_set_domain_internal(
 		group, new_domain, IOMMU_SET_DOMAIN_MUST_SUCCEED));
 }
+static int __iommu_group_alloc_blocking_domain(struct iommu_group *group);
+static void __iommu_restored_group_release_dma_owner(struct iommu_group *group);
 
 static int iommu_setup_default_domain(struct iommu_group *group,
 				      int target_type);
@@ -595,6 +597,15 @@ static void iommu_deinit_device(struct device *dev)
 		    release_domain == ops->blocked_domain)
 			release_domain = ops->identity_domain;
 
+		/*
+		 * Force the restored devices that are not reclaimed by the
+		 * driver to be attached to a blocking domain. This is to
+		 * prevent the restored devices to DMA to memory regions based
+		 * on their state from the previous kernel.
+		 */
+		if (dev_iommu_restored_state(dev))
+			release_domain = ops->blocked_domain;
+
 		release_domain->ops->attach_dev(release_domain, dev,
 						group->domain);
 	}
@@ -771,6 +782,12 @@ static void __iommu_group_remove_device(struct device *dev)
 			continue;
 
 		list_del(&device->list);
+
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	if (dev_iommu_restored_state(dev))
+		__iommu_restored_group_release_dma_owner(group);
+#endif
+
 		__iommu_group_free_device(group, device);
 		if (dev_has_iommu(dev))
 			iommu_deinit_device(dev);
@@ -3191,6 +3208,27 @@ static int __iommu_group_restore_domain(struct iommu_group *group)
 	group->owner = owner;
 	group->owner_cnt = 1;
 	return ret;
+}
+
+static void __iommu_restored_group_release_dma_owner(struct iommu_group *group)
+{
+	lockdep_assert_held(&group->mutex);
+	if (!group->domain)
+		return;
+
+	if (!list_empty(&group->devices))
+		return;
+
+	/*
+	 * Release the ownership of the group as all restored devices have been
+	 * removed.
+	 *
+	 * Note that the group will be detached from the restored domain in
+	 * release path and attached to a release domain.
+	 */
+	WARN_ON(!group->owner);
+	group->owner = NULL;
+	group->owner_cnt = 0;
 }
 
 /**
