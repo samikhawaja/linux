@@ -77,6 +77,7 @@ void iommu_unpreserve_domain(struct iommu_domain *domain);
 int iommu_preserve_device(struct iommu_domain *domain,
 			  struct device *dev, u64 *preserved_state);
 void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
+void iommu_release_restored_device(struct device *dev);
 
 static inline void *iommu_preserved_state(struct iommu_device *iommu)
 {
@@ -146,6 +147,10 @@ static inline int iommu_preserve_device(struct iommu_domain *domain,
 }
 
 static inline void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
+{
+}
+
+static inline void iommu_release_restored_device(struct device *dev)
 {
 }
 

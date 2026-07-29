@@ -656,6 +656,16 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 }
 EXPORT_SYMBOL_GPL(iommu_unpreserve_device);
 
+void iommu_release_restored_device(struct device *dev)
+{
+	/*
+	 * We do not support releasing the restored devices that are not
+	 * reclaimed by the device drivers as they can fallback to the default
+	 * domain.
+	 */
+	BUG_ON(dev_iommu_restored_state(dev));
+}
+
 struct iommu_domain *iommu_restore_domain(struct device *dev,
 					  struct iommu_device_ser *ser,
 					  void **owner)

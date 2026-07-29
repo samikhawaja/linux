@@ -792,6 +792,9 @@ static void iommu_release_device(struct device *dev)
 {
 	struct iommu_group *group = dev->iommu_group;
 
+	if (dev_iommu_restored_state(dev))
+		iommu_release_restored_device(dev);
+
 	if (group)
 		__iommu_group_remove_device(dev);
 
