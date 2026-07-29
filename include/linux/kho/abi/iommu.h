@@ -141,6 +141,10 @@ struct iommu_device_ser {
 	struct iommu_dev_map_ser domain_iommu_ser;
 } __packed;
 
+
+/* There are maximum 256 buses, so maximum 512 context tables */
+#define VTD_PRESERVED_BITMAP_LONGS  DIV_ROUND_UP(512, BITS_PER_LONG_LONG)
+
 /**
  * struct iommu_intel_ser - Serialized state of an Intel IOMMU instance
  * @restored: Whether IOMMU state is restored
@@ -154,7 +158,7 @@ struct iommu_intel_ser {
 	u8 padding[7];
 	u64 phys_addr;
 	u64 root_table;
-	u64 context_tables_bitmap[8]; /* Tracks upto 512 context tables */
+	u64 context_tables_bitmap[VTD_PRESERVED_BITMAP_LONGS];
 };
 
 /**

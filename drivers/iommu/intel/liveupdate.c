@@ -32,6 +32,13 @@ static void unpreserve_context_table(struct intel_iommu *iommu,
 {
 	struct context_entry *context;
 
+	/*
+	 * In the Intel IOMMU driver, context tables are never freed once they
+	 * are allocated during runtime, as they can be shared across multiple
+	 * devices. So taking the iommu lock here to protect against concurrent
+	 * allocations inside iommu_context_addr() should be enough. Once the
+	 * address is read, it is safe to use it without holding the lock.
+	 */
 	spin_lock(&iommu->lock);
 	context = iommu_context_addr(iommu, bus, devfn, 0);
 	spin_unlock(&iommu->lock);
@@ -147,6 +154,11 @@ int intel_iommu_preserve_device(struct device *dev,
 	device_ser->domain_iommu_ser.attachment_id = domain_id_iommu(info->domain,
 								     info->iommu);
 	return 0;
+}
+
+void intel_iommu_unpreserve_device(struct device *dev,
+				   struct iommu_device_ser *device_ser)
+{
 }
 
 int intel_iommu_preserve(struct iommu_device *iommu_dev,
