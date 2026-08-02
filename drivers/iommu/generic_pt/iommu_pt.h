@@ -1095,7 +1095,7 @@ static int NS(restore)(struct pt_iommu *iommu_table, struct iommu_domain_ser *se
 	struct pt_common *common = common_from_iommu(iommu_table);
 	struct pt_range range;
 
-	if (ser->vasz > common->max_oasz_lg2 ||
+	if (ser->vasz > common->max_vasz_lg2 ||
 	    ser->top_level > PT_MAX_TOP_LEVEL)
 		return -EINVAL;
 
@@ -1119,7 +1119,8 @@ static int NS(restore)(struct pt_iommu *iommu_table, struct iommu_domain_ser *se
 
 	/*
 	 * It is safe to override this here since this domain is immutable and
-	 * can only be freed.
+	 * can only be freed. This also means that the DMA_API will not be used
+	 * for non-coherent pages will not be created.
 	 *
 	 * Note that the FMT specific bits are not cleared as they might be
 	 * set/preserved/restored by the driver to handle special cases that are
