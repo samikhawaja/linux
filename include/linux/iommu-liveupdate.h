@@ -24,6 +24,9 @@ typedef int (*iommu_preserved_device_iter_fn)(struct iommu_device_ser *ser,
 					      void *arg);
 
 #ifdef CONFIG_IOMMU_LIVEUPDATE
+int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
+void iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler);
+
 /**
  * dev_iommu_preserved_state() - Get preserved state of a device
  * @dev: Target device
@@ -125,6 +128,15 @@ static inline void *iommu_preserved_state(struct iommu_device *iommu)
 	return iommu->outgoing_preserved_state;
 }
 #else
+static inline int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler)
+{
+	return 0;
+}
+
+static inline void iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler)
+{
+}
+
 static inline void *dev_iommu_preserved_state(struct device *dev)
 {
 	return NULL;
@@ -196,8 +208,4 @@ static inline void *iommu_preserved_state(struct iommu_device *iommu)
 	return NULL;
 }
 #endif
-
-int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler);
-void iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler);
-
 #endif /* _LINUX_IOMMU_LIVEUPDATE_H */
