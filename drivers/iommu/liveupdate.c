@@ -579,6 +579,9 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	struct pci_dev *pdev;
 	int ret;
 
+	if (!kho_is_enabled())
+		return -EOPNOTSUPP;
+
 	if (!dev_is_pci(dev))
 		return -EOPNOTSUPP;
 
@@ -588,6 +591,9 @@ int iommu_preserve_device(struct iommu_domain *domain,
 
 	pdev = to_pci_dev(dev);
 	iommu = dev->iommu;
+	if (!iommu)
+		return -EINVAL;
+
 	if (!iommu->iommu_dev->ops->preserve_device ||
 	    !iommu->iommu_dev->ops->unpreserve_device ||
 	    !iommu->iommu_dev->ops->preserve ||
@@ -601,21 +607,27 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	if (!flb_obj)
 		return -EINVAL;
 
-	guard(mutex)(&flb_obj->lock);
-	if (!domain->preserved_state)
-		return -EINVAL;
+	mutex_lock(&flb_obj->lock);
+	if (!domain->preserved_state) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
 
-	if (iommu->device_ser)
-		return -EINVAL;
+	if (iommu->device_ser) {
+		ret = -EINVAL;
+		goto out_unlock;
+	}
 
 	device_ser = alloc_iommu_device_ser(flb_obj);
-	if (IS_ERR(device_ser))
-		return PTR_ERR(device_ser);
+	if (IS_ERR(device_ser)) {
+		ret = PTR_ERR(device_ser);
+		goto out_unlock;
+	}
 
 	ret = iommu_preserve_locked(iommu->iommu_dev, flb_obj);
 	if (ret) {
 		device_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
-		return ret;
+		goto out_unlock;
 	}
 
 	device_ser->domain_iommu_ser.domain_phys = virt_to_phys(domain->preserved_state);
@@ -627,12 +639,17 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	if (ret) {
 		device_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
 		iommu_unpreserve_locked(iommu->iommu_dev, flb_obj);
-		return ret;
+		goto out_unlock;
 	}
 
 	dev->iommu->device_ser = device_ser;
 	*preserved_state = virt_to_phys(device_ser);
-	return 0;
+	ret = 0;
+
+out_unlock:
+	mutex_unlock(&flb_obj->lock);
+	liveupdate_flb_put_outgoing(&iommu_flb);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(iommu_preserve_device);
 
@@ -667,16 +684,19 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 	if (WARN_ON(ret) || !flb_obj)
 		return;
 
-	guard(mutex)(&flb_obj->lock);
+	mutex_lock(&flb_obj->lock);
 	iommu_device_ser = dev_iommu_preserved_state(dev);
 	if (WARN_ON(!iommu_device_ser))
-		return;
+		goto out_unlock;
 
 	dev->iommu->device_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
 	iommu->iommu_dev->ops->unpreserve_device(dev, iommu_device_ser);
 	dev->iommu->device_ser = NULL;
 
 	iommu_unpreserve_locked(iommu->iommu_dev, flb_obj);
+out_unlock:
+	mutex_unlock(&flb_obj->lock);
+	liveupdate_flb_put_outgoing(&iommu_flb);
 }
 EXPORT_SYMBOL_GPL(iommu_unpreserve_device);
 
