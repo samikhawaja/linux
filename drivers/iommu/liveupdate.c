@@ -743,6 +743,7 @@ int iommu_init_device_preserved_data(struct device *dev)
 	if (ret)
 		return ret;
 
+	mutex_lock(&flb_obj->lock);
 	if (!flb_obj->ser->device_array_phys)
 		goto out;
 
@@ -759,6 +760,7 @@ int iommu_init_device_preserved_data(struct device *dev)
 	device_ser = NULL;
 out:
 	dev->iommu->device_ser = device_ser;
+	mutex_unlock(&flb_obj->lock);
 	liveupdate_flb_put_incoming(&iommu_flb);
 	return 0;
 }
