@@ -985,16 +985,17 @@ static void release_dmar_iommu(struct intel_iommu *iommu)
 	struct iommu_hw_ser *iommu_ser;
 
 	iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
+	if (!iommu_ser) {
+		/*
+		 * All iommu domains must have been detached from the devices,
+		 * hence there should be no domain IDs in use.
+		 */
+		if (WARN_ON(!ida_is_empty(&iommu->domain_ida)))
+			return;
 
-	/*
-	 * All iommu domains must have been detached from the devices,
-	 * hence there should be no domain IDs in use.
-	 */
-	if (WARN_ON(!ida_is_empty(&iommu->domain_ida)))
-		return;
-
-	if ((iommu->gcmd & DMA_GCMD_TE) && !iommu_ser)
-		iommu_disable_translation(iommu);
+		if ((iommu->gcmd & DMA_GCMD_TE))
+			iommu_disable_translation(iommu);
+	}
 
 	if (iommu->copied_tables) {
 		bitmap_free(iommu->copied_tables);
