@@ -214,6 +214,9 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	void *mem;
 	int rc;
 
+	if (!kho_is_enabled())
+		return -EOPNOTSUPP;
+
 	if (IS_ERR(ictx))
 		return PTR_ERR(ictx);
 
