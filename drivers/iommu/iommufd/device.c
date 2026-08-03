@@ -1705,6 +1705,9 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 	int ret;
 
 	mutex_lock(&igroup->lock);
+	if (idev->liveupdate_preserved)
+		return -EBUSY;
+
 	if (_iommufd_device_has_pasid_attachments(idev)) {
 		ret = -EOPNOTSUPP;
 		goto out;
@@ -1731,8 +1734,10 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 				    idev->dev,
 				    preserved_state);
 
-	if (!ret)
+	if (!ret) {
 		igroup->nr_liveupdate_preserved++;
+		idev->liveupdate_preserved = true;
+	}
 out:
 	mutex_unlock(&igroup->lock);
 	return ret;
@@ -1753,6 +1758,9 @@ void iommufd_device_unpreserve(struct liveupdate_session *s,
 	struct iommufd_attach *attach;
 
 	mutex_lock(&igroup->lock);
+	if (!idev->liveupdate_preserved)
+		return;
+
 	attach = xa_load(&igroup->pasid_attach, IOMMU_NO_PASID);
 	if (!attach) {
 		WARN(1, "IOMMU_NO_PASID attachment not found");
@@ -1768,6 +1776,7 @@ void iommufd_device_unpreserve(struct liveupdate_session *s,
 
 	iommu_unpreserve_device(hwpt_paging->common.domain, idev->dev);
 	igroup->nr_liveupdate_preserved--;
+	idev->liveupdate_preserved = false;
 out:
 	mutex_unlock(&igroup->lock);
 }
