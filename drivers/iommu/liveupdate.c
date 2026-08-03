@@ -358,6 +358,8 @@ static int alloc_object_ser(void **curr_array_ptr, u64 max_objs)
 	struct iommu_array_hdr_ser *curr_array = *curr_array_ptr;
 	struct iommu_array_hdr_ser *next_array;
 
+	if (!kho_is_enabled())
+		return -EOPNOTSUPP;
 	/*
 	 * The objects marked as deleted are not reused to avoid traversal of
 	 * linked-list and arrays.
@@ -412,23 +414,31 @@ int iommu_preserve_domain(struct iommu_domain *domain, struct iommu_domain_ser *
 	if (!flb_obj)
 		return -EINVAL;
 
-	guard(mutex)(&flb_obj->lock);
-	if (domain->preserved_state)
-		return -EBUSY;
+	mutex_lock(&flb_obj->lock);
+	if (domain->preserved_state) {
+		ret = -EBUSY;
+		goto out_unlock;
+	}
 
 	domain_ser = alloc_iommu_domain_ser(flb_obj);
-	if (IS_ERR(domain_ser))
-		return PTR_ERR(domain_ser);
+	if (IS_ERR(domain_ser)) {
+		ret = PTR_ERR(domain_ser);
+		goto out_unlock;
+	}
 
 	ret = pt->ops->preserve(pt, domain_ser);
 	if (ret) {
 		domain_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
-		return ret;
+		goto out_unlock;
 	}
 
 	domain->preserved_state = domain_ser;
 	*ser = domain_ser;
-	return 0;
+	ret = 0;
+out_unlock:
+	mutex_unlock(&flb_obj->lock);
+	liveupdate_flb_put_outgoing(&iommu_flb);
+	return ret;
 }
 EXPORT_SYMBOL_GPL(iommu_preserve_domain);
 
@@ -453,9 +463,9 @@ void iommu_unpreserve_domain(struct iommu_domain *domain)
 	if (WARN_ON(ret) || !flb_obj)
 		return;
 
-	guard(mutex)(&flb_obj->lock);
+	mutex_lock(&flb_obj->lock);
 	if (!domain->preserved_state)
-		return;
+		goto out_unlock;
 
 	/*
 	 * There is no check for attached devices here. The correctness relies
@@ -469,6 +479,9 @@ void iommu_unpreserve_domain(struct iommu_domain *domain)
 	pt->ops->unpreserve(pt, domain_ser);
 	domain_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
 	domain->preserved_state = NULL;
+out_unlock:
+	mutex_unlock(&flb_obj->lock);
+	liveupdate_flb_put_outgoing(&iommu_flb);
 }
 EXPORT_SYMBOL_GPL(iommu_unpreserve_domain);
 
