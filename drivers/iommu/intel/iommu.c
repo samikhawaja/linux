@@ -1851,12 +1851,12 @@ static int iommu_suspend(void *data)
 	struct intel_iommu *iommu = NULL;
 	unsigned long flag;
 
-	if (iommu_preserved_state(&iommu->iommu))
-		return -EBUSY;
-
 	iommu_flush_all();
 
 	for_each_active_iommu(iommu, drhd) {
+		if (iommu_preserved_state(&iommu->iommu))
+			return -EBUSY;
+
 		iommu_disable_translation(iommu);
 
 		raw_spin_lock_irqsave(&iommu->register_lock, flag);
@@ -2742,7 +2742,7 @@ static int domain_context_clear_one_cb(struct pci_dev *pdev, u16 alias, void *op
  * devices, unbinding the driver from any one of them will possibly leave
  * the others unable to operate.
  */
-void domain_context_clear(struct device_domain_info *info)
+static void domain_context_clear(struct device_domain_info *info)
 {
 	if (!dev_is_pci(info->dev)) {
 		domain_context_clear_one(info, info->bus, info->devfn);
