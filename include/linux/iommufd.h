@@ -86,7 +86,7 @@ static inline int iommufd_device_preserve(struct liveupdate_session *s,
 					  u64 *iommufd_tokenp,
 					  u64 *preserved_state)
 {
-	return -EOPNOTSUPP;
+	return 0;
 }
 
 static inline void iommufd_device_unpreserve(struct liveupdate_session *s,
