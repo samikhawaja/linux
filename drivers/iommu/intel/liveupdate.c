@@ -421,6 +421,9 @@ int intel_iommu_restore_device(struct iommu_domain *domain,
 	if (!device_ser)
 		return -EINVAL;
 
+	if (dev_is_real_dma_subdevice(dev))
+		return -EOPNOTSUPP;
+
 	ret = domain_reattach_iommu(dmar_domain, iommu, device_ser);
 	if (ret)
 		return ret;
@@ -430,9 +433,6 @@ int intel_iommu_restore_device(struct iommu_domain *domain,
 	spin_lock_irqsave(&dmar_domain->lock, flags);
 	list_add(&info->link, &dmar_domain->devices);
 	spin_unlock_irqrestore(&dmar_domain->lock, flags);
-
-	if (dev_is_real_dma_subdevice(dev))
-		return 0;
 
 	if (!sm_supported(iommu))
 		intel_iommu_enable_pci_ats(info);
