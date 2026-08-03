@@ -285,11 +285,18 @@ int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 	int ret, idx;
 
 	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)&flb_obj);
-	if (ret)
-		return -ENOENT;
+	if (ret == -ENODATA || ret == -ENOENT)
+		return 0;
 
+	if (ret)
+		return ret;
+
+	/*
+	 * device_array_phys should be valid if the FLB was created for
+	 * preservation. This is true even if no devices were preserved.
+	 */
 	if (!flb_obj->ser->device_array_phys) {
-		ret = -ENOENT;
+		ret = -EINVAL;
 		goto out;
 	}
 
@@ -333,6 +340,10 @@ struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser typ
 	if (ret)
 		return ERR_PTR(ret);
 
+	/*
+	 * iommu_array_phys should be valid if the FLB was created for
+	 * preservation. This is true even if no iommus were preserved.
+	 */
 	if (!flb_obj->ser->iommu_array_phys) {
 		iommu_ser = ERR_PTR(-EINVAL);
 		goto out;
