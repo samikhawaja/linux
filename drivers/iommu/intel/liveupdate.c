@@ -548,6 +548,9 @@ int intel_iommu_preserve_device(struct device *dev,
 		return -EOPNOTSUPP;
 	}
 
+	if (dev_is_real_dma_subdevice(dev))
+		return -EOPNOTSUPP;
+
 	if (!info || !info->domain)
 		return -EINVAL;
 
