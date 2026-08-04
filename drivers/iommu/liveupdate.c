@@ -710,16 +710,16 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 	if (!dev_is_pci(dev))
 		return;
 
+	if (!kho_is_enabled())
+		return;
+
 	if (!dev->iommu_group ||
 	    !iommu_group_dma_owner_claimed(dev->iommu_group))
 		return;
 
 	iommu = dev->iommu;
-	if (WARN_ON(!iommu->iommu_dev->ops->unpreserve_device ||
+	if (WARN_ON(!iommu || !iommu->iommu_dev->ops->unpreserve_device ||
 		    !iommu->iommu_dev->ops->unpreserve))
-		return;
-
-	if (!dev_iommu_preserved_state(dev))
 		return;
 
 	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
