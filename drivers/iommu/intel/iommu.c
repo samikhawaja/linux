@@ -1851,7 +1851,9 @@ static int iommu_suspend(void *data)
 	for_each_active_iommu(iommu, drhd) {
 		if (iommu_preserved_state(&iommu->iommu))
 			return -EBUSY;
+	}
 
+	for_each_active_iommu(iommu, drhd) {
 		iommu_disable_translation(iommu);
 
 		raw_spin_lock_irqsave(&iommu->register_lock, flag);
