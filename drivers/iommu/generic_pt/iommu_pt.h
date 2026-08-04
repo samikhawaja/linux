@@ -1088,7 +1088,10 @@ static int __restore_tables(struct pt_range *range, void *arg,
 	return 0;
 }
 
-static const struct pt_iommu_ops NS(ops_immutable);
+static void NS(deinit)(struct pt_iommu *iommu_table);
+static const struct pt_iommu_ops NS(ops_immutable) = {
+	.deinit = NS(deinit),
+};
 
 static int NS(restore)(struct pt_iommu *iommu_table, struct iommu_domain_ser *ser)
 {
@@ -1337,10 +1340,6 @@ static const struct pt_iommu_ops NS(ops) = {
 	.unpreserve = NS(unpreserve),
 	.restore = NS(restore),
 #endif
-};
-
-static const struct pt_iommu_ops NS(ops_immutable) = {
-	.deinit = NS(deinit),
 };
 
 static int pt_init_common(struct pt_common *common)
