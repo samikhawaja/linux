@@ -428,7 +428,7 @@ static struct iommu_domain_ser *alloc_iommu_domain_ser(struct iommu_flb_obj *flb
 /**
  * iommu_preserve_domain() - Preserve an IOMMU domain across live update
  * @domain: Domain to preserve
- * @ser: Pointer to receive the physical serialized domain state handle
+ * @ser: Pointer to receive the virtual serialized domain state handle
  *
  * Return: 0 on success, or negative error code.
  */
