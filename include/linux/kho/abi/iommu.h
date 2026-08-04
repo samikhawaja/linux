@@ -111,7 +111,8 @@ struct iommu_domain_ser {
 	u64 top_table_phys;
 	u64 top_level;
 	u32 vasz;
-	u32 sign_extend:1;
+	u8 sign_extend;
+	u8 padding[7];
 	struct iommu_domain *restored_domain;
 } __packed;
 
