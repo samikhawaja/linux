@@ -466,7 +466,6 @@ enum pasid_lu_op {
 	PASID_LU_OP_PRESERVE = 1,
 	PASID_LU_OP_UNPRESERVE,
 	PASID_LU_OP_RESTORE,
-	PASID_LU_OP_FREE,
 };
 
 static int pasid_lu_do_op(void *table, enum pasid_lu_op op)
@@ -482,9 +481,6 @@ static int pasid_lu_do_op(void *table, enum pasid_lu_op op)
 		break;
 	case PASID_LU_OP_RESTORE:
 		iommu_restore_pages(virt_to_phys(table));
-		break;
-	case PASID_LU_OP_FREE:
-		iommu_free_pages(table);
 		break;
 	}
 
@@ -668,14 +664,15 @@ void *intel_pasid_restore_table(struct device *dev, u64 max_pasid)
 	if (!ser || !ser->intel.pasid_table)
 		return NULL;
 
-	BUG_ON(pasid_lu_handle_pd(phys_to_virt(ser->intel.pasid_table),
-				  ser->intel.max_pasid,
-				  PASID_LU_OP_RESTORE));
 	/*
 	 * MAX PASID of a device should not change as it is read from
 	 * capabilities.
 	 */
 	BUG_ON(ser->intel.max_pasid != max_pasid);
+
+	BUG_ON(pasid_lu_handle_pd(phys_to_virt(ser->intel.pasid_table),
+				  ser->intel.max_pasid,
+				  PASID_LU_OP_RESTORE));
 
 	return phys_to_virt(ser->intel.pasid_table);
 }
