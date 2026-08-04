@@ -1705,8 +1705,10 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 	int ret;
 
 	mutex_lock(&igroup->lock);
-	if (idev->liveupdate_preserved)
-		return -EBUSY;
+	if (idev->liveupdate_preserved) {
+		ret = -EBUSY;
+		goto out;
+	}
 
 	if (_iommufd_device_has_pasid_attachments(idev)) {
 		ret = -EOPNOTSUPP;
@@ -1759,7 +1761,7 @@ void iommufd_device_unpreserve(struct liveupdate_session *s,
 
 	mutex_lock(&igroup->lock);
 	if (!idev->liveupdate_preserved)
-		return;
+		goto out;
 
 	attach = xa_load(&igroup->pasid_attach, IOMMU_NO_PASID);
 	if (!attach) {
