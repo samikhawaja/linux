@@ -204,7 +204,7 @@ static void _iommufd_unpreserve(struct iommufd_ctx *ictx,
 
 static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 {
-	struct iommufd_ctx *ictx = iommufd_ctx_from_file(args->file);
+	struct iommufd_ctx *ictx;
 	struct iommufd_hwpt_paging *hwpt;
 	struct iommufd_ser *iommufd_ser;
 	struct iommufd_object *obj;
@@ -217,6 +217,7 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	if (!kho_is_enabled())
 		return -EOPNOTSUPP;
 
+	ictx = iommufd_ctx_from_file(args->file);
 	if (IS_ERR(ictx))
 		return PTR_ERR(ictx);
 
@@ -302,8 +303,12 @@ out_unlock:
 
 static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 {
-	struct iommufd_ctx *ictx = iommufd_ctx_from_file(args->file);
+	struct iommufd_ctx *ictx;
 
+	if (!kho_is_enabled())
+		return;
+
+	ictx = iommufd_ctx_from_file(args->file);
 	if (WARN_ON(IS_ERR(ictx)))
 		return;
 
