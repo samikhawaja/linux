@@ -495,13 +495,10 @@ void iommu_unpreserve_domain(struct iommu_domain *domain)
 	struct iommu_flb_obj *flb_obj;
 	int ret;
 
-	if (WARN_ON(!pt || !pt->ops->unpreserve))
-		return;
-
 	if (!kho_is_enabled())
 		return;
 
-	if (!domain->preserved_state)
+	if (WARN_ON(!pt || !pt->ops->unpreserve))
 		return;
 
 	ret = liveupdate_flb_get_outgoing(&iommu_flb, (void **)&flb_obj);
