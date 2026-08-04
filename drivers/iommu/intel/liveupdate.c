@@ -148,6 +148,9 @@ static int clear_unpreserve_context_entry_fn(struct device *dev,
         if (!info)
                 return 0;
 
+        if (!dev_is_pci(dev) || !dev_iommu_preserved_state(dev))
+		goto out_unpreserved;
+
         /*
 	 * PRE use cases are not supported with Live Update and a preservation
 	 * attempt on such domains returns an error. But Intel IOMMU driver
@@ -156,22 +159,22 @@ static int clear_unpreserve_context_entry_fn(struct device *dev,
 	 * generate PRQs, during kexec, as translations are kept enabled during
 	 * live update. There is no need to disable these for DMA aliases.
          */
-        if (dev_is_pci(dev) && dev_iommu_preserved_state(dev) &&
-	    sm_supported(info->iommu)) {
+        if (sm_supported(info->iommu)) {
                 context = iommu_context_addr(info->iommu, info->bus, info->devfn, 0);
                 if (context) {
 			context_clear_sm_pre(context);
                         __iommu_flush_cache(info->iommu, context, sizeof(*context));
                 }
-                return 0;
         }
 
-        if (dev_is_pci(dev)) {
+	return 0;
+
+out_unpreserved:
+        if (dev_is_pci(dev))
                 pci_for_each_dma_alias(to_pci_dev(dev),
                                        clear_unpreserved_alias_cb, info);
-        } else {
+        else
                 clear_unpreserved_context(info, info->bus, info->devfn);
-        }
 
         return 0;
 }
