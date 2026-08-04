@@ -757,10 +757,8 @@ static inline bool match_device_ser(struct iommu_device_ser *match,
  *
  * Looks up incoming Live Update state for @dev and attaches it to the device if
  * found.
- *
- * Return: 0 on success, or an error.
  */
-int iommu_init_device_preserved_data(struct device *dev)
+void iommu_init_device_preserved_data(struct device *dev)
 {
 	struct iommu_device_ser *device_ser = NULL;
 	struct iommu_device_array_ser *array;
@@ -768,11 +766,11 @@ int iommu_init_device_preserved_data(struct device *dev)
 	int ret, idx;
 
 	if (!dev_is_pci(dev))
-		return 0;
+		return;
 
 	ret = iommu_liveupdate_flb_get_incoming(&flb_obj);
 	if (ret)
-		return 0;
+		return;
 
 	mutex_lock(&flb_obj->lock);
 	array = phys_to_virt(flb_obj->ser->device_array_phys);
@@ -790,7 +788,6 @@ out:
 	dev->iommu->device_ser = device_ser;
 	mutex_unlock(&flb_obj->lock);
 	liveupdate_flb_put_incoming(&iommu_flb);
-	return 0;
 }
 EXPORT_SYMBOL(iommu_init_device_preserved_data);
 
@@ -831,7 +828,7 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 
 	ret = iommu_liveupdate_flb_get_incoming(&flb_obj);
 	if (ret)
-		return 0;
+		return ERR_PTR(ret);
 
 	mutex_lock(&flb_obj->lock);
 

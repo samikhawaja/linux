@@ -536,9 +536,7 @@ static int iommu_init_device(struct device *dev)
 	}
 
 #ifdef CONFIG_IOMMU_LIVEUPDATE
-	ret = iommu_init_device_preserved_data(dev);
-	if (ret)
-		goto err_module_put;
+	iommu_init_device_preserved_data(dev);
 #endif
 
 	iommu_dev = ops->probe_device(dev);
