@@ -273,6 +273,12 @@ void iommu_liveupdate_unregister_flb(struct liveupdate_file_handler *handler)
 }
 EXPORT_SYMBOL(iommu_liveupdate_unregister_flb);
 
+/*
+ * iommu_liveupdate_flb_get_incoming() - Helper function to get FLB state
+ * @flb_objp: Pointer to get the restored FLB object
+ *
+ * Return: 0 if FLB state found and restored, error if no data found
+ */
 static int iommu_liveupdate_flb_get_incoming(struct iommu_flb_obj **flb_objp)
 {
 	struct iommu_flb_obj *flb_obj;
@@ -280,7 +286,7 @@ static int iommu_liveupdate_flb_get_incoming(struct iommu_flb_obj **flb_objp)
 
 	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)flb_objp);
 	if (ret == -ENODATA)
-		return 0;
+		return ret;
 
 	/*
 	 * An IOMMU FLB was found, but failed to restore. This is considered
@@ -334,7 +340,7 @@ int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 
 	ret = iommu_liveupdate_flb_get_incoming(&flb_obj);
 	if (ret)
-		return 0;
+		return ret;
 
 	array = phys_to_virt(flb_obj->ser->device_array_phys);
 	iommu_liveupdate_for_each_arr(array) {
@@ -358,9 +364,7 @@ EXPORT_SYMBOL(iommu_for_each_preserved_device);
  *
  * Gets the preserved state of an IOMMU HW using token and the IOMMU type.
  *
- * Return: struct iommu_hw_ser on success, NULL if no preserved state found or
- * an error if the preserved state was found but cannot be restored or
- * incompatible.
+ * Return: struct iommu_hw_ser on success, NULL if no preserved state found.
  */
 struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser type)
 {
@@ -371,7 +375,7 @@ struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser typ
 
 	ret = iommu_liveupdate_flb_get_incoming(&flb_obj);
 	if (ret)
-		return 0;
+		return NULL;
 
 	array = phys_to_virt(flb_obj->ser->iommu_array_phys);
 	iommu_liveupdate_for_each_arr(array) {
