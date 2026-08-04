@@ -127,6 +127,7 @@ static void iommu_liveupdate_flb_free(struct iommu_flb_obj *obj)
 		iommu_liveupdate_unpreserve_free(obj->ser->iommu_array_phys);
 
 	kho_unpreserve_free(obj->ser);
+	mutex_destroy(&obj->lock);
 	kfree(obj);
 }
 
@@ -150,6 +151,7 @@ static int iommu_liveupdate_flb_preserve(struct liveupdate_flb_op_args *argp)
 
 	ser = mem;
 	obj->ser = ser;
+	ser->version = IOMMU_LUO_FLB_VERSION;
 
 	mem = kho_alloc_preserve(PAGE_SIZE);
 	if (IS_ERR(mem))
@@ -183,6 +185,7 @@ err_free_domains:
 err_free_ser:
 	kho_unpreserve_free(obj->ser);
 err_free_obj:
+	mutex_destroy(&obj->lock);
 	kfree(obj);
 	return PTR_ERR(mem);
 }
@@ -201,6 +204,7 @@ static void iommu_liveupdate_flb_finish(struct liveupdate_flb_op_args *argp)
 	iommu_liveupdate_folio_put(obj->ser->iommu_array_phys);
 
 	folio_put(virt_to_folio(obj->ser));
+	mutex_destroy(&obj->lock);
 	kfree(obj);
 }
 
