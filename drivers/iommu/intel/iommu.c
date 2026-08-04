@@ -990,8 +990,7 @@ static void release_dmar_iommu(struct intel_iommu *iommu)
 		 * All iommu domains must have been detached from the devices,
 		 * hence there should be no domain IDs in use.
 		 */
-		if (WARN_ON(!ida_is_empty(&iommu->domain_ida)))
-			return;
+		WARN_ON(!ida_is_empty(&iommu->domain_ida));
 
 		if ((iommu->gcmd & DMA_GCMD_TE))
 			iommu_disable_translation(iommu);
@@ -1615,18 +1614,13 @@ out_unmap:
 
 static int __init init_dmars(void)
 {
-	struct iommu_hw_ser *iommu_ser = NULL;
+	struct iommu_hw_ser *iommu_ser;
 	struct dmar_drhd_unit *drhd;
 	struct intel_iommu *iommu;
 	int ret;
 
 	for_each_iommu(iommu, drhd) {
 		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
-		if (iommu_ser && IS_ERR(iommu_ser)) {
-			ret = PTR_ERR(iommu_ser);
-			goto free_iommu;
-		}
-
 		if (drhd->ignored) {
 			if (WARN_ON(iommu_ser)) {
 				ret = -EINVAL;
@@ -2138,10 +2132,6 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 
 	/* Use IOMMU HW unit MMIO base to identify the preserved state. */
 	iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
-	if (iommu_ser && IS_ERR(iommu_ser)) {
-		ret = PTR_ERR(iommu_ser);
-		goto out;
-	}
 
 	/*
 	 * Disable translation if already enabled prior to OS handover.
