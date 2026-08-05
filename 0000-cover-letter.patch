@@ -1,0 +1,42 @@
+From 5ea7f19fa4bb5d2f4dbee2312795c7a09d459ef4 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Wed, 5 Aug 2026 00:07:05 +0000
+Subject: [RFC PATCH 0/1] vfio/pci: Disable sriov on PF device close
+
+When userspace closes a VFIO device file descriptor, the vfio driver
+performs a hardware reset on the PCIe device to ensure it is returned to
+a clean state. However, if the closed device is an SR-IOV Physical
+Function (PF), it may have instantiated Virtual Functions (VFs) that are
+actively bound to host kernel drivers (or other vfio instances).
+
+When the PF is hardware-reset via VFIO, it implicitly disrupts SR-IOV
+operations at the device level. Because this reset happens without
+notifying the core PCI driver model, the kernel drivers bound to the VFs
+remain loaded and operate under the assumption that the VF hardware is
+still functional.
+
+This creates a state mismatch between the kernel's view of the hardware
+and the actual device state. Subsequent attempts by the host OS or bound
+drivers to interact with the VFs will fail, leading to unexpected
+errors.
+
+Disabling SRIOV before resetting the device avoid these by tearing down
+the VFs and removing the VF devices.
+
+The fix in this patch only disables SRIOV on PF reset for device bound
+to vfio-pci drivers. But this probably needs a fix for kernel drivers
+also, maybe return -EBUSY when SRIOV is enabled?
+
+Looking forward to your feedback on this.
+
+Samiullah Khawaja (1):
+  vfio/pci: Disable sriov on PF device reset
+
+ drivers/vfio/pci/vfio_pci_core.c | 7 +++++++
+ 1 file changed, 7 insertions(+)
+
+
+base-commit: 0f6da28aab51b16762ed82e8fdeaa5042da45b08
+-- 
+2.55.0.629.g250fe7f194-goog
+
