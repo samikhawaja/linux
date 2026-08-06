@@ -3176,15 +3176,22 @@ int iommu_fwspec_add_ids(struct device *dev, const u32 *ids, int num_ids)
 }
 EXPORT_SYMBOL_GPL(iommu_fwspec_add_ids);
 
-static inline void *__iommu_group_restored_state(struct iommu_group *group)
+static void *__iommu_group_restored_state(struct iommu_group *group)
 {
-	struct device *dev;
+	struct group_device *gdev;
+	void *state;
 
-	dev = iommu_group_first_dev(group);
-	if (!dev_is_pci(dev))
-		return NULL;
+	lockdep_assert_held(&group->mutex);
+	for_each_group_device(group, gdev) {
+		if (!dev_is_pci(gdev->dev))
+			continue;
 
-	return dev_iommu_restored_state(dev);
+		state = dev_iommu_restored_state(gdev->dev);
+		if (state)
+			return state;
+	}
+
+	return NULL;
 }
 
 static int __iommu_group_restore_domain(struct iommu_group *group)
