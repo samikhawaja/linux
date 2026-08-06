@@ -1848,11 +1848,14 @@ static int iommu_suspend(void *data)
 
 	iommu_flush_all();
 
-	for_each_active_iommu(iommu, drhd) {
-		if (iommu_preserved_state(&iommu->iommu))
-			return -EBUSY;
-	}
-
+	/*
+	 * Note that IOMMU suspend doesn't affect live update. The state
+	 * preserved during live update is not released and remains valid during
+	 * suspend and reused during IOMMU resume.
+	 *
+	 * Also note deployment of suspend/resume and live updated use case
+	 * should be mostly mutually exclusive.
+	 */
 	for_each_active_iommu(iommu, drhd) {
 		iommu_disable_translation(iommu);
 
