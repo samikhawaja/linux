@@ -627,7 +627,7 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	}
 
 	if (iommu->device_ser) {
-		ret = -EINVAL;
+		ret = -EBUSY;
 		goto out_unlock;
 	}
 

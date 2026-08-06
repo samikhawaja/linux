@@ -340,6 +340,12 @@ static int _iommu_for_each_dev_cb(struct device *dev, void *data)
 	return 0;
 }
 
+/**
+ * iommu_for_each_dev() - Iterate over all devices attached to an IOMMU
+ * @iter: Device iterator context
+ *
+ * Return: 0 on success, or negative error code.
+ */
 int iommu_for_each_dev(struct iommu_dev_iter *iter)
 {
 	int ret;

@@ -1246,12 +1246,6 @@ struct iommu_dev_iter {
 	void *arg;
 };
 
-/**
- * iommu_for_each_dev() - Iterate over all devices attached to an IOMMU
- * @iter: Device iterator context
- *
- * Return: 0 on success, or negative error code.
- */
 int iommu_for_each_dev(struct iommu_dev_iter *iter);
 
 extern struct mutex iommu_probe_device_lock;
