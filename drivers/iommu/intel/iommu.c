@@ -2132,7 +2132,7 @@ int dmar_parse_one_satc(struct acpi_dmar_header *hdr, void *arg)
 static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 {
 	struct intel_iommu *iommu = dmaru->iommu;
-	struct iommu_hw_ser *iommu_ser = NULL;
+	struct iommu_hw_ser *iommu_ser;
 	int ret;
 
 	/* Use IOMMU HW unit MMIO base to identify the preserved state. */
