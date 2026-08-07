@@ -72,34 +72,6 @@ void iommufd_device_detach(struct iommufd_device *idev, ioasid_t pasid);
 struct iommufd_ctx *iommufd_device_to_ictx(struct iommufd_device *idev);
 u32 iommufd_device_to_id(struct iommufd_device *idev);
 
-#ifdef CONFIG_IOMMU_LIVEUPDATE
-int iommufd_device_preserve(struct liveupdate_session *s,
-			    struct iommufd_device *idev,
-			    u64 *iommufd_tokenp,
-			    u64 *preserved_state);
-void iommufd_device_unpreserve(struct liveupdate_session *s,
-			       struct iommufd_device *idev);
-bool iommufd_device_is_preserved(struct iommufd_device *idev);
-#else
-static inline int iommufd_device_preserve(struct liveupdate_session *s,
-					  struct iommufd_device *idev,
-					  u64 *iommufd_tokenp,
-					  u64 *preserved_state)
-{
-	return 0;
-}
-
-static inline void iommufd_device_unpreserve(struct liveupdate_session *s,
-					     struct iommufd_device *idev)
-{
-}
-
-static inline bool iommufd_device_is_preserved(struct iommufd_device *idev)
-{
-	return false;
-}
-#endif
-
 struct iommufd_access_ops {
 	u8 needs_pin_pages : 1;
 	void (*unmap)(void *data, unsigned long iova, unsigned long length);
@@ -242,6 +214,15 @@ int iommufd_access_rw(struct iommufd_access *access, unsigned long iova,
 int iommufd_vfio_compat_ioas_get_id(struct iommufd_ctx *ictx, u32 *out_ioas_id);
 int iommufd_vfio_compat_ioas_create(struct iommufd_ctx *ictx);
 int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx);
+
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+int iommufd_device_preserve(struct liveupdate_session *s,
+			    struct iommufd_device *idev,
+			    u64 *iommufd_tokenp,
+			    u64 *preserved_state);
+void iommufd_device_unpreserve(struct liveupdate_session *s,
+			       struct iommufd_device *idev);
+bool iommufd_device_is_preserved(struct iommufd_device *idev);
 #else /* !CONFIG_IOMMUFD */
 static inline struct iommufd_ctx *iommufd_ctx_from_file(struct file *file)
 {
@@ -426,4 +407,24 @@ static inline void iommufd_viommu_destroy_mmap(struct iommufd_viommu *viommu,
 {
 	_iommufd_destroy_mmap(viommu->ictx, &viommu->obj, offset);
 }
+
+#if !defined(CONFIG_IOMMU_LIVEUPDATE) || !defined(CONFIG_IOMMUFD)
+static inline int iommufd_device_preserve(struct liveupdate_session *s,
+					  struct iommufd_device *idev,
+					  u64 *iommufd_tokenp,
+					  u64 *preserved_state)
+{
+	return 0;
+}
+
+static inline void iommufd_device_unpreserve(struct liveupdate_session *s,
+					     struct iommufd_device *idev)
+{
+}
+
+static inline bool iommufd_device_is_preserved(struct iommufd_device *idev)
+{
+	return false;
+}
+#endif
 #endif
