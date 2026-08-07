@@ -1805,7 +1805,7 @@ EXPORT_SYMBOL_NS_GPL(iommufd_device_unpreserve, "IOMMUFD");
  */
 bool iommufd_device_is_preserved(struct iommufd_device *idev)
 {
-	return idev && idev->igroup && idev->igroup->nr_liveupdate_preserved;
+	return idev && idev->liveupdate_preserved;
 }
 EXPORT_SYMBOL_NS_GPL(iommufd_device_is_preserved, "IOMMUFD");
 #endif
