@@ -164,11 +164,9 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	pdev = vdev->pdev;
 
 	mutex_lock(&device->dev_set->lock);
-#if IS_ENABLED(CONFIG_IOMMUFD)
 	ret = iommufd_device_preserve(args->session,
 				      device->iommufd_device,
 				      &token, &preserved_state);
-#endif
 	mutex_unlock(&device->dev_set->lock);
 
 	if (ret)
@@ -195,10 +193,8 @@ err_unpreserve:
 
 err_iommufd_unpreserve:
 	mutex_lock(&device->dev_set->lock);
-#if IS_ENABLED(CONFIG_IOMMUFD)
 	iommufd_device_unpreserve(args->session,
 				  device->iommufd_device);
-#endif
 	mutex_unlock(&device->dev_set->lock);
 	return ret;
 }
@@ -208,10 +204,8 @@ static void vfio_pci_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 	struct vfio_device *device = vfio_device_from_file(args->file);
 
 	mutex_lock(&device->dev_set->lock);
-#if IS_ENABLED(CONFIG_IOMMUFD)
 	iommufd_device_unpreserve(args->session,
 				  device->iommufd_device);
-#endif
 	mutex_unlock(&device->dev_set->lock);
 
 	pci_liveupdate_unpreserve(to_pci_dev(device->dev));
