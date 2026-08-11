@@ -1,0 +1,26 @@
+From 3bffbfbf23e2e9d7a38129701ae91c760c1773f2 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Tue, 11 Aug 2026 01:49:02 +0000
+Subject: [PATCH 0/1] vfio: Use the correct detach op in attach error path
+
+vfio_df_ioctl_attach_pt() uses detach_ioas() op in the error path
+regardless of the attachment type, that is whether it is PASID or device
+level attachment.
+
+Use the pasid_detach_ioas() op if the VFIO_DEVICE_ATTACH_PASID was
+specified in the attach flags.
+
+Sashiko found this existing issue while I was working on my IOMMU
+persistence series for liveupdate.
+
+Samiullah Khawaja (1):
+  vfio: Use the correct detach op in attach error path
+
+ drivers/vfio/device_cdev.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+
+base-commit: 3d08ff75a47a3e7e2ab45a3bcab6723b4d906422
+-- 
+2.55.0.679.g6767b8d81c-goog
+
