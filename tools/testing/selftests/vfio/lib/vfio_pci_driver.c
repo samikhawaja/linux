@@ -6,6 +6,7 @@
 extern struct vfio_pci_driver_ops dsa_ops;
 extern struct vfio_pci_driver_ops ioat_ops;
 #endif
+extern struct vfio_pci_driver_ops nvme_ops;
 extern struct vfio_pci_driver_ops nv_falcon_ops;
 extern struct vfio_pci_driver_ops igb_ops;
 
@@ -14,6 +15,7 @@ static struct vfio_pci_driver_ops *driver_ops[] = {
 	&dsa_ops,
 	&ioat_ops,
 #endif
+	&nvme_ops,
 	&nv_falcon_ops,
 	&igb_ops,
 };

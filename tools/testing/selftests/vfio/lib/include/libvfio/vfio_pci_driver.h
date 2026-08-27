@@ -36,9 +36,22 @@ struct vfio_pci_driver_ops {
 	 *  - The device will attempt DMA reads on [src, src + size).
 	 *  - The device will attempt DMA writes on [dst, dst + size).
 	 *  - The device will not generate any interrupts.
+	 *  - For direct DMA engines, the device will attempt DMA writes on
+	 *    [dst, dst + size) after memcpy_start() has returned. For
+	 *    storage-backed devices (e.g. NVMe), the DMA reads on
+	 *    [src, src + size) complete during memcpy_start(), and only the
+	 *    DMA writes on [dst, dst + size) are still outstanding when it
+	 *    returns.
+	 *  - If @interrupt is false, the device will not generate any
+	 *    interrupts.
+	 *  - If @interrupt is true, the device will generate between 1 and
+	 *    @count MSIs (device->driver.msi).
 	 *
-	 * memcpy_start() returns immediately, it does not wait for the
-	 * copies to complete.
+	 * memcpy_start() never waits for the copies to complete. Direct DMA
+	 * engines return immediately. Storage-backed devices (e.g. NVMe) must
+	 * stage the data before any of it can be read back, so memcpy_start()
+	 * blocks until the DMA reads have completed and returns with the DMA
+	 * writes in flight.
 	 */
 	void (*memcpy_start)(struct vfio_pci_device *device,
 			     iova_t src, iova_t dst, u64 size, u64 count);

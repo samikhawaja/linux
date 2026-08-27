@@ -9,6 +9,7 @@ LIBVFIO_C += libvfio.c
 LIBVFIO_C += sysfs.c
 LIBVFIO_C += vfio_pci_device.c
 LIBVFIO_C += vfio_pci_driver.c
+LIBVFIO_C += drivers/nvme/nvme.c
 
 ifeq ($(ARCH:x86_64=x86),x86)
 LIBVFIO_C += drivers/ioat/ioat.c
