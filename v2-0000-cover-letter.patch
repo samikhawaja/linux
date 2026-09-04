@@ -1,0 +1,31 @@
+From 4b7706e1bfef8287d21c2aaf9c673a20ffbfa741 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Thu, 10 Sep 2026 17:33:40 +0000
+Subject: [PATCH v2 0/1] liveupdate: Add documentation for file dependencies
+
+I sent out v3 of liveupdate_get_file_incoming() and
+liveupdate_get_token_outgoing() series to add documentation for
+dependencies.
+
+https://lore.kernel.org/all/20260820191854.1642931-1-skhawaja@google.com/
+
+But since v2 of that series is already merged into kho/next, I am
+sending the documentation as a separate patch.
+
+Changelog:
+
+v2:
+ - Rebased on liveupdate next branch.
+ - Fixed documentation.
+
+Samiullah Khawaja (1):
+  liveupdate: luo_file: Add documentation for dependencies
+
+ kernel/liveupdate/luo_file.c | 15 +++++++++++++++
+ 1 file changed, 15 insertions(+)
+
+
+base-commit: 945d61765894dda2f0344de50cb1ade2e51b66fd
+-- 
+2.55.0.1032.g73a4cd73de-goog
+
