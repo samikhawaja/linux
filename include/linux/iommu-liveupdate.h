@@ -106,6 +106,9 @@ static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain 
 struct iommu_domain *iommu_restore_domain(struct device *dev,
 					  struct iommu_device_ser *ser,
 					  void **owner);
+bool iommu_verify_dma_ownership(struct device *dev, void *owner,
+				u64 dma_owner_token);
+bool iommu_is_liveupdate_dma_owner(void *owner);
 int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 				    void *arg);
 void iommu_init_device_preserved_data(struct device *dev);
@@ -161,6 +164,18 @@ static inline struct iommu_domain *iommu_restore_domain(struct device *dev,
 							void **owner)
 {
 	return NULL;
+}
+
+static inline bool iommu_verify_dma_ownership(struct device *dev,
+					      void *owner,
+					      u64 dma_owner_token)
+{
+	return false;
+}
+
+static inline bool iommu_is_liveupdate_dma_owner(void *owner)
+{
+	return false;
 }
 
 static inline int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn, void *arg)
