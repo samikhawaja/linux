@@ -95,10 +95,14 @@ static void dma_memfd_setup(struct vfio_pci_device *device, int session_fd)
 {
 	int fd, ret;
 
-	fd = memfd_create("dma-buffer", 0);
+	fd = memfd_create("dma-buffer", MFD_ALLOW_SEALING);
 	VFIO_ASSERT_GE(fd, 0);
 
 	ret = fallocate(fd, 0, 0, MEMFD_SIZE);
+	VFIO_ASSERT_EQ(ret, 0);
+
+	ret = fcntl(fd, F_ADD_SEALS,
+		    F_SEAL_GROW | F_SEAL_SHRINK | F_SEAL_SEAL);
 	VFIO_ASSERT_EQ(ret, 0);
 
 	printf("Preserving memfd of size 0x%x in session\n", MEMFD_SIZE);
@@ -198,9 +202,9 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	struct iommu *iommu;
 	int session_fd;
 	int device_fd;
-	int memfd;
 	int iommufd;
 	int dev_id;
+	int memfd;
 	int stage;
 	int ret;
 
