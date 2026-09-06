@@ -1262,6 +1262,8 @@ bool iommu_group_dma_owner_claimed(struct iommu_group *group);
 bool iommu_group_is_singleton(struct iommu_group *group);
 
 int iommu_device_claim_dma_owner(struct device *dev, void *owner);
+int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
+                                   u64 restore_token);
 void iommu_device_release_dma_owner(struct device *dev);
 
 int iommu_attach_device_pasid(struct iommu_domain *domain,
