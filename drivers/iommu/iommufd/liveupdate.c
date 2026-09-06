@@ -7,6 +7,7 @@
 #include <linux/iommufd.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/iommufd.h>
+#include <linux/kho/abi/iommu.h>
 #include <linux/liveupdate.h>
 #include <linux/iommu-lu.h>
 #include <linux/mm.h>

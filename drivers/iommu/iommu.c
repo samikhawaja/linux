@@ -3117,7 +3117,7 @@ static struct iommu_domain *__iommu_group_maybe_restore_domain(struct iommu_grou
 	 * later.
 	 */
 	group->owner = (void *)device_ser->token;
-	group->owner_cnt++;
+	group->owner_cnt = 1;
 	return domain;
 }
 
@@ -3380,11 +3380,12 @@ static int __iommu_group_alloc_blocking_domain(struct iommu_group *group)
 	return 0;
 }
 
-static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner, bool transfer)
+static int __iommu_take_dma_ownership(struct iommu_group *group,
+				      void *owner, bool reclaim)
 {
 	int ret;
 
-	if (!transfer &&
+	if (!reclaim &&
 	    ((group->domain && group->domain != group->default_domain) ||
 	     !xa_empty(&group->pasid_array)))
 		return -EBUSY;
@@ -3393,7 +3394,7 @@ static int __iommu_take_dma_ownership(struct iommu_group *group, void *owner, bo
 	if (ret)
 		return ret;
 
-	if (!transfer) {
+	if (!reclaim) {
 		ret = __iommu_group_set_domain(group, group->blocking_domain);
 		if (ret)
 			return ret;
@@ -3435,16 +3436,65 @@ unlock_out:
 EXPORT_SYMBOL_GPL(iommu_group_claim_dma_owner);
 
 /**
+ * iommu_device_reclaim_dma_owner() - Set DMA ownership of a preserved device
+ * @dev: The device.
+ * @owner: Caller specified pointer. Used for exclusive ownership.
+ * @restore_token: Token that was used to preserve the device in previous
+ * kernel.
+ *
+ * Reclaim the DMA ownership of a device. The current owner is replaced with the
+ * new owner and the owner_count is set to 1. Other preserved devices in the
+ * same group may call the iommu_device_claim_dma_owner if the ownership is
+ * already relaimed. They can claim ownership if they present the same owner
+ * value. Returns 0 on success and error code on failure.
+ */
+int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
+                                   u64 restore_token)
+{
+	/* Caller must be a probed driver on dev */
+	struct iommu_group *group = dev->iommu_group;
+	int ret = 0;
+
+	if (WARN_ON(!owner))
+		return -EINVAL;
+
+	if (!group)
+		return -ENODEV;
+
+	mutex_lock(&group->mutex);
+	/* Device should have restored state and also an owner. */
+	if (!group->owner_cnt || !dev_iommu_restored_state(dev)) {
+		ret = -EINVAL;
+		goto unlock_out;
+	}
+
+	if (group->owner == (void*)restore_token) {
+		group->owner_cnt = 0;
+
+		/* Try to reclaim ownership */
+		ret = __iommu_take_dma_ownership(group, owner, true);
+		if (ret) {
+			/* Restore the token ownership if failed to reclaim. */
+			group->owner = (void*)restore_token;
+			group->owner_cnt = 1;
+		}
+	}
+unlock_out:
+	mutex_unlock(&group->mutex);
+	return ret;
+
+}
+
+/**
  * iommu_device_claim_dma_owner() - Set DMA ownership of a device
  * @dev: The device.
  * @owner: Caller specified pointer. Used for exclusive ownership.
- * @transfer: Transfer ownership even if domain attached.
  *
  * Claim the DMA ownership of a device. Multiple devices in the same group may
  * concurrently claim ownership if they present the same owner value. Returns 0
  * on success and error code on failure
  */
-int iommu_device_claim_dma_owner(struct device *dev, void *owner, bool transfer)
+int iommu_device_claim_dma_owner(struct device *dev, void *owner)
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
@@ -3466,7 +3516,7 @@ int iommu_device_claim_dma_owner(struct device *dev, void *owner, bool transfer)
 		goto unlock_out;
 	}
 
-	ret = __iommu_take_dma_ownership(group, owner, transfer);
+	ret = __iommu_take_dma_ownership(group, owner, false);
 unlock_out:
 	mutex_unlock(&group->mutex);
 	return ret;
