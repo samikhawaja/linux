@@ -121,6 +121,8 @@ static inline int dev_iommu_restored_attachment_id(struct device *dev,
 
 struct iommu_domain *iommu_restore_domain(struct device *dev,
 					  struct iommu_device_ser *ser);
+bool iommu_verify_dma_ownership(struct device *dev, void *owner,
+				u64 dma_owner_token);
 int iommu_for_each_restored_device(iommu_restored_device_iter_fn fn,
 				   void *arg);
 void iommu_init_device_restored_data(struct device *dev);
@@ -181,6 +183,13 @@ static inline struct iommu_domain *iommu_restore_domain(struct device *dev,
 							struct iommu_device_ser *ser)
 {
 	return NULL;
+}
+
+static inline bool iommu_verify_dma_ownership(struct device *dev,
+					      void *owner,
+					      u64 dma_owner_token)
+{
+	return false;
 }
 
 static inline int iommu_for_each_restored_device(iommu_restored_device_iter_fn fn, void *arg)

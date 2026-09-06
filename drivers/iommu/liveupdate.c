@@ -743,3 +743,27 @@ out:
 	liveupdate_flb_put_incoming(&iommu_flb);
 	return domain;
 }
+
+/**
+ * iommu_verify_dma_ownership - Verify the dma ownership of the caller
+ * @dev: Target device
+ * @owner: Current dma owner of the device
+ * @dma_owner_token: Token to verify to establish dma ownership of the caller.
+ *
+ * Check if liveupdate is the dma owner of the device. If yes then match the
+ * dma_owner_token with the token of the dma owner set during preservation.
+ *
+ * Return true on success, false on failure.
+ */
+bool iommu_verify_dma_ownership(struct device *dev, void *owner, u64 dma_owner_token)
+{
+	struct iommu_device_ser *device_ser;
+
+	/* Liveupdate owns a restored device using its restored state. */
+	device_ser = dev_iommu_restored_state(dev);
+	if (!device_ser || owner != device_ser ||
+	    device_ser->dma_owner_token != dma_owner_token)
+		return false;
+
+	return true;
+}
