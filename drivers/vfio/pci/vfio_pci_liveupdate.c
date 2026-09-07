@@ -184,6 +184,8 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 
 	ser->bdf = pci_dev_id(pdev);
 	ser->domain = pci_domain_nr(pdev->bus);
+	ser->iommufd_ser.iommufd_token = token;
+	ser->iommufd_ser.preserved_state = preserved_state;
 
 	args->serialized_data = virt_to_phys(ser);
 	return 0;
@@ -292,7 +294,7 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 		goto out;
 	}
 
-	device->preserved_iommufd_token = ser->iommufd_ser.token;
+	device->preserved_iommufd_state = ser->iommufd_ser.preserved_state;
 
 	args->file = file;
 out:

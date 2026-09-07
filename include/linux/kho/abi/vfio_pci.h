@@ -29,15 +29,29 @@
 #define VFIO_PCI_LUO_FH_COMPATIBLE "vfio-pci-v1"
 
 /**
+ * struct iommufd_ser - Serialized state of the associated iommufd.
+ *
+ * @iommufd_token: Unique token of the preserved iommufd context.
+ * @preserved_state: The preserved state of the underlying device.
+ */
+struct iommufd_ser {
+	u64 iommufd_token;
+	u64 preserved_state;
+};
+
+/**
  * struct vfio_pci_core_device_ser - Serialized state of a single VFIO PCI
  * device.
  *
  * @domain: The device's PCI domain number (segment).
  * @bdf: The device's PCI bus, device, and function number.
+ * @iommufd_ser: Serialized IOMMUFD state mapping for this device.
  */
 struct vfio_pci_core_device_ser {
 	u32 domain;
 	u16 bdf;
+	u8 padding[2];
+	struct iommufd_ser iommufd_ser;
 } __packed;
 
 #endif /* _LINUX_LIVEUPDATE_ABI_VFIO_PCI_H */

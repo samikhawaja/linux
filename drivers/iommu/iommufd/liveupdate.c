@@ -316,7 +316,7 @@ static void iommufd_liveupdate_unpreserve(struct liveupdate_file_op_args *args)
 
 static int iommufd_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
-	struct iommufd_lu *iommufd_lu;
+	struct iommufd_ser *iommufd_ser;
 	struct iommufd_ctx *ictx;
 	struct folio *folio_lu;
 	struct file *file;
@@ -326,7 +326,7 @@ static int iommufd_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	if (IS_ERR_OR_NULL(folio_lu))
 		return -EFAULT;
 
-	iommufd_lu = folio_address(folio_lu);
+	iommufd_ser = folio_address(folio_lu);
 
 	file = anon_inode_create_getfile("iommufd", &iommufd_fops,
 					 NULL, O_RDWR, NULL);
@@ -345,11 +345,11 @@ static int iommufd_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 		goto err_fput;
 	}
 
-	if (WARN_ON(ictx->lu)) {
+	if (WARN_ON(ictx->serialized_data)) {
 		rc = -EEXIST;
 		goto err_ctx_put;
 	}
-	ictx->lu = iommufd_lu;
+	ictx->serialized_data = iommufd_ser;
 
 	iommufd_ctx_put(ictx);
 
@@ -372,23 +372,23 @@ int iommufd_hwpt_liveupdate_restore(struct iommufd_ucmd *ucmd)
 	struct iommufd_hwpt_paging *hwpt = NULL;
 	struct iommufd_ctx *ictx = ucmd->ictx;
 	struct iommu_domain_ser *domain_ser;
-	struct iommufd_hwpt_lu *hwpt_lu;
-	struct iommufd_lu *iommufd_lu;
+	struct iommufd_hwpt_ser *hwpt_ser;
+	struct iommufd_ser *iommufd_ser;
 	struct iommu_domain *domain;
 	unsigned int i;
 	int rc;
 
-	iommufd_lu = ictx->lu;
-	if (!iommufd_lu)
+	iommufd_ser = ictx->serialized_data;
+	if (!iommufd_ser)
 		return -ENOTTY;
 
-	for (i = 0; i < iommufd_lu->nr_hwpts; i++) {
-		hwpt_lu = &iommufd_lu->hwpts[i];
+	for (i = 0; i < iommufd_ser->nr_hwpts; i++) {
+		hwpt_ser = &iommufd_ser->hwpt_array[i];
 
-		if (hwpt_lu->reclaimed)
+		if (hwpt_ser->reclaimed)
 			continue;
 
-		if (hwpt_lu->token == cmd->hwpt_token)
+		if (hwpt_ser->token == cmd->hwpt_token)
 			goto hwpt_found;
 	}
 
@@ -399,7 +399,7 @@ hwpt_found:
 	if (IS_ERR(hwpt))
 		return PTR_ERR(hwpt);
 
-	domain_ser = __va(hwpt_lu->domain_data);
+	domain_ser = __va(hwpt_ser->domain_data);
 	domain = domain_ser->restored_domain;
 	if (!domain) {
 		rc = -ENOENT;
@@ -409,7 +409,7 @@ hwpt_found:
 	iommufd_hwpt_init_from_domain(&hwpt->common, domain);
 	iommufd_object_finalize(ictx, &hwpt->common.obj);
 
-	hwpt_lu->reclaimed = true;
+	hwpt_ser->reclaimed = true;
 	hwpt->liveupdate_restored = true;
 	cmd->pt_id = hwpt->common.obj.id;
 	return 0;
@@ -422,23 +422,23 @@ err_destroy:
 static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
 	struct iommufd_hwpt_paging *hwpt;
-	struct iommufd_hwpt_lu *hwpt_lu;
-	struct iommufd_lu *iommufd_lu;
+	struct iommufd_hwpt_ser *hwpt_lu;
+	struct iommufd_ser *iommufd_lu;
 	struct iommufd_object *obj;
 	struct iommufd_ctx *ictx;
 	unsigned long index;
 	unsigned int i;
 
-	if (!args->retrieved || !args->file) {
+	if (!args->retrieve_status || !args->file) {
 		pr_warn("%s: fd not reclaimed\n", __func__);
 		return false;
 	}
 
 	ictx = iommufd_ctx_from_file(args->file);
-	iommufd_lu = ictx->lu;
+	iommufd_lu = ictx->serialized_data;
 
 	for (i = 0; i < iommufd_lu->nr_hwpts; i++) {
-		hwpt_lu = &iommufd_lu->hwpts[i];
+		hwpt_lu = &iommufd_lu->hwpt_array[i];
 
 		if (!hwpt_lu->reclaimed)
 			return false;
@@ -450,7 +450,7 @@ static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 			continue;
 
 		hwpt = container_of(obj, struct iommufd_hwpt_paging, common.obj);
-		if (!hwpt->lu_restored)
+		if (!hwpt->liveupdate_restored)
 			continue;
 
 		if (!hwpt->common.domain || iommu_domain_has_attachments(hwpt->common.domain)) {
@@ -465,13 +465,13 @@ static bool iommufd_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 
 static void iommufd_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
-	struct iommufd_lu *iommufd_lu;
+	struct iommufd_ser *iommufd_ser;
 	struct iommufd_ctx *ictx;
 
 	ictx = iommufd_ctx_from_file(args->file);
-	iommufd_lu = ictx->lu;
-	ictx->lu = NULL;
-	folio_put(virt_to_folio(iommufd_lu));
+	iommufd_ser = ictx->serialized_data;
+	ictx->serialized_data = NULL;
+	folio_put(virt_to_folio(iommufd_ser));
 	iommufd_ctx_put(ictx);
 }
 
