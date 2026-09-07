@@ -312,7 +312,6 @@ out:
 
 }
 
-
 static bool vfio_pci_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
 	struct vfio_device *device;
