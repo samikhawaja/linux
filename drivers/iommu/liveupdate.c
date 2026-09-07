@@ -589,12 +589,12 @@ static struct iommu_device_ser *alloc_iommu_device_ser(struct iommu_flb_obj *flb
  * iommu_preserve_device() - Preserve device state across live update
  * @domain: Associated IOMMU domain
  * @dev: Device to preserve
- * @preserved_state: Pointer to receive physical address of preserved state
+ * @dma_owner_token: Token to identify DMA owner of this device
  *
  * Return: 0 on success, or negative error code.
  */
 int iommu_preserve_device(struct iommu_domain *domain,
-			  struct device *dev, u64 *preserved_state)
+			  struct device *dev, u64 dma_owner_token)
 {
 	struct iommu_device_ser *device_ser;
 	struct iommu_flb_obj *flb_obj;
@@ -647,6 +647,7 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	device_ser->domain_iommu_ser.iommu_phys = virt_to_phys(iommu->iommu_dev->outgoing_preserved_state);
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain_nr = pci_domain_nr(pdev->bus);
+	device_ser->dma_owner_token = dma_owner_token;
 
 	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
 	if (ret) {
@@ -656,7 +657,6 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	}
 
 	dev->iommu->device_ser = device_ser;
-	*preserved_state = virt_to_phys(device_ser);
 	ret = 0;
 
 out_unlock:

@@ -3576,7 +3576,7 @@ EXPORT_SYMBOL_GPL(iommu_group_claim_dma_owner);
  * iommu_device_reclaim_dma_owner() - Set DMA ownership of a preserved device
  * @dev: The device.
  * @owner: Caller specified pointer. Used for exclusive ownership.
- * @preserved_state: Preserved state of the device from previous kernel.
+ * @dma_owner_token: Token of the DMA owner.
  *
  * Reclaim the DMA ownership of a device. The current owner is replaced with the
  * new owner and the owner_count is set to 1. Other preserved devices in the
@@ -3585,7 +3585,7 @@ EXPORT_SYMBOL_GPL(iommu_group_claim_dma_owner);
  * value. Returns 0 on success and error code on failure.
  */
 int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
-                                   u64 preserved_state)
+                                   u64 dma_owner_token)
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
@@ -3606,7 +3606,7 @@ int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
 	}
 
 	device_ser = dev_iommu_preserved_state(dev);
-	if (device_ser != phys_to_virt(preserved_state))
+	if (device_ser->dma_owner_token != dma_owner_token)
 		return -EPERM;
 
 	if (group->owner == device_ser) {

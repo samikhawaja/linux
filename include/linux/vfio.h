@@ -81,7 +81,8 @@ struct vfio_device {
 	struct dentry *debug_root;
 
 #ifdef CONFIG_LIVEUPDATE
-	u64 preserved_iommufd_state;
+	u64 restored_iommufd_token;
+	struct file *restored_iommufd_file;
 #endif
 };
 

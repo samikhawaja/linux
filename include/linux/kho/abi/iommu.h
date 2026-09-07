@@ -144,12 +144,14 @@ struct iommu_device_intel_ser {
  * @hdr: Common object header
  * @devid: Device ID
  * @pci_domain_nr: PCI domain number
+ * @dma_owner_token: Token to identify the DMA owner of this device
  * @domain_iommu_ser: Domain and IOMMU mapping
  */
 struct iommu_device_ser {
 	struct iommu_hdr_ser hdr;
 	u32 devid;
 	u32 pci_domain_nr;
+	u64 dma_owner_token;
 	struct iommu_dev_map_ser domain_iommu_ser;
 	union {
 		struct iommu_device_intel_ser intel;

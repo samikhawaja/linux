@@ -205,7 +205,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  * @ictx: iommufd file descriptor
  * @dev: Pointer to a physical device struct
  * @id: Output ID number to return to userspace for this device
- * @preserved_state: Preserved state if restoring.
+ * @preserved_iommufd_token: Token of the preserved iommufd if restoring.
  *
  * A successful bind establishes an ownership over the device and returns
  * struct iommufd_device pointer, otherwise returns error pointer.
@@ -219,7 +219,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  */
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 					   struct device *dev, u32 *id,
-					   u64 preserved_state)
+					   u64 preserved_iommufd_token)
 {
 	struct iommufd_device *idev;
 	struct iommufd_group *igroup;
@@ -258,8 +258,14 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 
 	/* If restoring, try to reclaim dma ownership. */
 	rc = -EINVAL;
-	if (preserved_state)
-		rc = iommu_device_reclaim_dma_owner(dev, ictx, preserved_state);
+	if (preserved_iommufd_token) {
+		if (!ictx->serialized_data) {
+			rc = -EPERM;
+			goto out_group_put;
+		}
+
+		rc = iommu_device_reclaim_dma_owner(dev, ictx, preserved_iommufd_token);
+	}
 
 	/* Fallback to normal claim dma owner if restoring. */
 	if (rc) {
@@ -1699,14 +1705,12 @@ static bool _iommufd_device_has_pasid_attachments(struct iommufd_device *idev)
  * @s: Live update session
  * @idev: Target iommufd device
  * @iommufd_tokenp: Pointer to store outgoing iommufd token
- * @preserved_state: Pointer to store preserved hardware state
  *
  * Return: 0 on success, or negative error code.
  */
 int iommufd_device_preserve(struct liveupdate_session *s,
 			    struct iommufd_device *idev,
-			    u64 *iommufd_tokenp,
-			    u64 *preserved_state)
+			    u64 *iommufd_tokenp)
 {
 	struct iommufd_hwpt_paging *hwpt_paging;
 	struct iommufd_hw_pagetable *hwpt;
@@ -1753,7 +1757,7 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 
 	ret = iommu_preserve_device(hwpt_paging->common.domain,
 				    idev->dev,
-				    preserved_state);
+				    *iommufd_tokenp);
 
 	if (!ret) {
 		igroup->nr_liveupdate_preserved++;

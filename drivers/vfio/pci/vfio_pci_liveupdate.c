@@ -156,8 +156,8 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	struct vfio_device *device = vfio_device_from_file(args->file);
 	struct vfio_pci_core_device_ser *ser;
 	struct vfio_pci_core_device *vdev;
-	u64 token, preserved_state;
 	struct pci_dev *pdev;
+	u64 iommufd_token;
 	int ret = 0;
 
 	vdev = container_of(device, struct vfio_pci_core_device, vdev);
@@ -166,7 +166,7 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	mutex_lock(&device->dev_set->lock);
 	ret = iommufd_device_preserve(args->session,
 				      device->iommufd_device,
-				      &token, &preserved_state);
+				      &iommufd_token);
 	mutex_unlock(&device->dev_set->lock);
 
 	if (ret)
@@ -184,8 +184,7 @@ static int vfio_pci_liveupdate_preserve(struct liveupdate_file_op_args *args)
 
 	ser->bdf = pci_dev_id(pdev);
 	ser->domain = pci_domain_nr(pdev->bus);
-	ser->iommufd_ser.iommufd_token = token;
-	ser->iommufd_ser.preserved_state = preserved_state;
+	ser->iommufd_ser.iommufd_token = iommufd_token;
 
 	args->serialized_data = virt_to_phys(ser);
 	return 0;
@@ -279,6 +278,7 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
 	struct vfio_pci_core_device_ser *ser;
 	struct vfio_device *device;
+	struct file *iommufd_file;
 	struct file *file;
 	int ret = 0;
 
@@ -288,22 +288,29 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	if (!device)
 		return -ENODEV;
 
+	ret = liveupdate_get_file_incoming(args->session,
+					   ser->iommufd_ser.iommufd_token,
+					   &iommufd_file);
+	if (ret)
+		goto out;
+
 	file = vfio_device_liveupdate_cdev_open(device);
 	if (IS_ERR(file)) {
 		ret = PTR_ERR(file);
+		fput(iommufd_file);
 		goto out;
 	}
 
-	device->preserved_iommufd_state = ser->iommufd_ser.preserved_state;
-
+	device->restored_iommufd_token = ser->iommufd_ser.iommufd_token;
+	device->restored_iommufd_file = iommufd_file;
 	args->file = file;
+
 out:
 	/* Drop the reference from vfio_find_device() */
 	vfio_device_put_registration(device);
 	return ret;
 
 }
-
 
 static bool vfio_pci_liveupdate_can_finish(struct liveupdate_file_op_args *args)
 {
@@ -323,6 +330,12 @@ static void vfio_pci_liveupdate_finish(struct liveupdate_file_op_args *args)
 
 	pci_liveupdate_finish(to_pci_dev(device->dev));
 	kho_restore_free(phys_to_virt(args->serialized_data));
+
+	device->restored_iommufd_token = 0;
+	if (device->restored_iommufd_file) {
+		fput(device->restored_iommufd_file);
+		device->restored_iommufd_file = NULL;
+	}
 }
 
 static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {

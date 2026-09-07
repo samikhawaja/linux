@@ -118,13 +118,15 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 			       struct iommufd_ctx *ictx, u32 *out_device_id)
 {
 	struct iommufd_device *idev;
-	u64 preserved_state = 0;
+	u64 iommufd_token = 0;
 
 #ifdef CONFIG_LIVEUPDATE
-	preserved_state = vdev->preserved_iommufd_state;
+	iommufd_token = vdev->restored_iommufd_token;
+	if (iommufd_ctx_from_file(vdev->restored_iommufd_file) != ictx)
+		return -EPERM;
 #endif
 
-	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id, preserved_state);
+	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id, iommufd_token);
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 	vdev->iommufd_device = idev;
