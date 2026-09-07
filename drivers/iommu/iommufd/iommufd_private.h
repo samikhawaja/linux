@@ -50,7 +50,7 @@ struct iommufd_ctx {
 #define IOMMUFD_OBJ_LIVEUPDATE_MARK XA_MARK_1
 	/* @liveupdate_mutex: Protects the preservation of HWPTs. */
 	struct mutex liveupdate_mutex;
-	struct iommufd_lu *lu;
+	struct iommufd_ser *serialized_data;
 #endif
 	wait_queue_head_t destroy_wait;
 	struct rw_semaphore ioas_creation_lock;

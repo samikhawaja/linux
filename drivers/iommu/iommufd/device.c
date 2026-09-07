@@ -205,7 +205,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  * @ictx: iommufd file descriptor
  * @dev: Pointer to a physical device struct
  * @id: Output ID number to return to userspace for this device
- * @restore_token: Preserved state token if restoring.
+ * @preserved_state: Preserved state if restoring.
  *
  * A successful bind establishes an ownership over the device and returns
  * struct iommufd_device pointer, otherwise returns error pointer.
@@ -219,7 +219,7 @@ void iommufd_device_destroy(struct iommufd_object *obj)
  */
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 					   struct device *dev, u32 *id,
-					   u32 restore_token)
+					   u64 preserved_state)
 {
 	struct iommufd_device *idev;
 	struct iommufd_group *igroup;
@@ -258,8 +258,8 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 
 	/* If restoring, try to reclaim dma ownership. */
 	rc = -EINVAL;
-	if (restore_token)
-		rc = iommu_device_reclaim_dma_owner(dev, ictx, restore_token);
+	if (preserved_state)
+		rc = iommu_device_reclaim_dma_owner(dev, ictx, preserved_state);
 
 	/* Fallback to normal claim dma owner if restoring. */
 	if (rc) {
