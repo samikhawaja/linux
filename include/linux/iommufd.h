@@ -219,8 +219,7 @@ int iommufd_vfio_compat_set_no_iommu(struct iommufd_ctx *ictx);
 #ifdef CONFIG_IOMMU_LIVEUPDATE
 int iommufd_device_preserve(struct liveupdate_session *s,
 			    struct iommufd_device *idev,
-			    u64 *iommufd_tokenp,
-			    u64 *preserved_state);
+			    u64 *iommufd_tokenp);
 void iommufd_device_unpreserve(struct liveupdate_session *s,
 			       struct iommufd_device *idev);
 bool iommufd_device_is_preserved(struct iommufd_device *idev);
@@ -413,8 +412,7 @@ static inline void iommufd_viommu_destroy_mmap(struct iommufd_viommu *viommu,
 #if !IS_ENABLED(CONFIG_IOMMU_LIVEUPDATE) || !IS_ENABLED(CONFIG_IOMMUFD)
 static inline int iommufd_device_preserve(struct liveupdate_session *s,
 					  struct iommufd_device *idev,
-					  u64 *iommufd_tokenp,
-					  u64 *preserved_state)
+					  u64 *iommufd_tokenp)
 {
 	return 0;
 }

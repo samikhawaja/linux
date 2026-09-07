@@ -32,11 +32,9 @@
  * struct iommufd_ser - Serialized state of the associated iommufd.
  *
  * @iommufd_token: Unique token of the preserved iommufd context.
- * @preserved_state: The preserved state of the underlying device.
  */
 struct iommufd_ser {
 	u64 iommufd_token;
-	u64 preserved_state;
 };
 
 /**
