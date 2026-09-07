@@ -1263,7 +1263,7 @@ bool iommu_group_is_singleton(struct iommu_group *group);
 
 int iommu_device_claim_dma_owner(struct device *dev, void *owner);
 int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
-                                   u64 restore_token);
+                                   u64 dma_owner_token);
 void iommu_device_release_dma_owner(struct device *dev);
 
 int iommu_attach_device_pasid(struct iommu_domain *domain,

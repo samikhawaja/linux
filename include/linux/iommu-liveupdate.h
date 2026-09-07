@@ -187,7 +187,7 @@ static inline void iommu_unpreserve_domain(struct iommu_domain *domain)
 }
 
 static inline int iommu_preserve_device(struct iommu_domain *domain,
-					struct device *dev, u64 *preserved_state)
+					struct device *dev, u64 dma_owner_token)
 {
 	return -EOPNOTSUPP;
 }
