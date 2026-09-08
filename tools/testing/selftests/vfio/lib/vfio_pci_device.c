@@ -383,16 +383,15 @@ int __vfio_device_bind_iommufd(int device_fd, int iommufd, const char *vf_token)
 	if (ioctl(device_fd, VFIO_DEVICE_BIND_IOMMUFD, &args))
 		return -errno;
 
-	return 0;
+	return args.out_devid;
 }
 
-static int vfio_device_bind_iommufd(int device_fd, int iommufd,
-				    const char *vf_token)
+int vfio_device_bind_iommufd(int device_fd, int iommufd, const char *vf_token)
 {
 	int ret = __vfio_device_bind_iommufd(device_fd, iommufd, vf_token);
 
 	VFIO_ASSERT_GE(ret, 0, "Failed VFIO_DEVICE_BIND_IOMMUFD ioctl\n");
-	return args.out_devid;
+	return ret;
 }
 
 static void vfio_device_attach_iommufd_pt(int device_fd, u32 pt_id)
@@ -420,20 +419,10 @@ static void vfio_pci_iommufd_setup(struct vfio_pci_device *device,
 {
 	if (device_fd >= 0)
 		device->fd = device_fd;
-<<<<<<< HEAD
 	else
 		vfio_pci_cdev_open(device, bdf);
-	vfio_device_bind_iommufd(device->fd, device->iommu->iommufd, vf_token);
-=======
-	} else {
-		cdev_path = vfio_pci_get_cdev_path(bdf);
-		device->fd = open(cdev_path, O_RDWR);
-		VFIO_ASSERT_GE(device->fd, 0);
-		free((void *)cdev_path);
-	}
 
-	device->dev_id = vfio_device_bind_iommufd(device->fd, device->iommu->iommufd);
->>>>>>> 4e502b2b94b8 (vfio: selftests: Add support of creating iommus from iommufd)
+	device->dev_id = vfio_device_bind_iommufd(device->fd, device->iommu->iommufd, vf_token);
 	vfio_device_attach_iommufd_pt(device->fd, device->iommu->ioas_id);
 }
 
