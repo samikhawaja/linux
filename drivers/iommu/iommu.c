@@ -3633,7 +3633,7 @@ int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
-	struct iommu_device_ser *device_ser;
+	void *current_owner;
 	int ret = 0;
 
 	if (WARN_ON(!owner))
@@ -3649,20 +3649,18 @@ int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
 		goto unlock_out;
 	}
 
-	device_ser = dev_iommu_restored_state(dev);
-	if (device_ser->dma_owner_token != dma_owner_token)
-		return -EPERM;
-
-	if (group->owner == device_ser) {
+	if (iommu_verify_dma_ownership(dev, group->owner, dma_owner_token)) {
+		current_owner = group->owner;
 		group->owner_cnt = 0;
 
 		/* Try to reclaim ownership */
 		ret = __iommu_take_dma_ownership(group, owner, true);
 		if (ret) {
 			/* Restore the ownership if failed to reclaim. */
-			group->owner = device_ser;
+			group->owner = current_owner;
 			group->owner_cnt = 1;
 		}
+
 		goto unlock_out;
 	} else if (group->owner != owner) {
 		ret = -EPERM;
