@@ -761,6 +761,35 @@ int iommu_probe_device(struct device *dev)
 	return 0;
 }
 
+static void __iommu_group_remove_restored_device(struct iommu_group *group,
+						 struct device *dev)
+{
+	struct iommu_device_ser *device_ser;
+
+	lockdep_assert_held(&group->mutex);
+	device_ser = dev_iommu_restored_state(dev);
+	if (!device_ser)
+		return;
+
+	if (!group->owner_cnt || group->owner != device_ser)
+		return;
+
+	if (group->owner_cnt > 1) {
+		group->owner_cnt--;
+	} else {
+		group->owner_cnt = 0;
+		group->owner = NULL;
+
+		/*
+		 * Note that for the unreclaimed restored devices this is
+		 * considered device remove by the drivers so it only
+		 * decontructs the software state and on rescan the restored
+		 * device can be reattached to the restored domain.
+		 */
+		__iommu_group_set_domain_nofail(group, group->blocking_domain);
+	}
+}
+
 static void __iommu_group_free_device(struct iommu_group *group,
 				      struct group_device *grp_dev)
 {
@@ -772,13 +801,14 @@ static void __iommu_group_free_device(struct iommu_group *group,
 	trace_remove_device_from_group(group->id, dev);
 
 	/*
-	 * If the group has become empty then ownership must have been
-	 * released, and the current domain must be set back to NULL or
-	 * the default domain.
+	 * If the group has become empty then ownership must have been released,
+	 * and the current domain must be set back to NULL, default domain or
+	 * blocking domain.
 	 */
 	if (list_empty(&group->devices))
 		WARN_ON(group->owner_cnt ||
-			group->domain != group->default_domain);
+			(group->domain != group->default_domain &&
+			 group->domain != group->blocking_domain));
 
 	kfree(grp_dev->name);
 	kfree(grp_dev);
@@ -791,6 +821,7 @@ static void __iommu_group_remove_device(struct device *dev)
 	struct group_device *device;
 
 	mutex_lock(&group->mutex);
+	__iommu_group_remove_restored_device(group, dev);
 	for_each_group_device(group, device) {
 		if (device->dev != dev)
 			continue;
@@ -815,9 +846,6 @@ static void __iommu_group_remove_device(struct device *dev)
 static void iommu_release_device(struct device *dev)
 {
 	struct iommu_group *group = dev->iommu_group;
-
-	if (dev_iommu_restored_state(dev))
-		iommu_release_restored_device(dev);
 
 	if (group)
 		__iommu_group_remove_device(dev);

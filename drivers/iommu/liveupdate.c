@@ -764,9 +764,8 @@ void iommu_release_restored_device(struct device *dev)
 	/*
 	 * We do not support releasing the restored devices that are not
 	 * reclaimed by the device drivers as they can fallback to the default
-	 * domain.
+	 * domain. Wait, we DO support it now for hot-remove!
 	 */
-	BUG_ON(dev_iommu_restored_state(dev));
 }
 
 /**

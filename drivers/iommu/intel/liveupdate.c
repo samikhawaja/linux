@@ -463,6 +463,35 @@ err:
 	return ret;
 }
 
+int intel_iommu_detach_restored_device(struct iommu_domain *domain,
+				       struct device *dev)
+{
+	struct device_domain_info *info = dev_iommu_priv_get(dev);
+	struct intel_iommu *iommu = info->iommu;
+	unsigned long flags;
+
+	iopf_for_domain_remove(info->domain ? &info->domain->domain : NULL, dev);
+	if (!info->domain_attached)
+		return 0;
+
+	if (info->domain)
+		cache_tag_unassign_domain(info->domain, dev, IOMMU_NO_PASID);
+
+	info->domain_attached = false;
+
+	if (!info->domain)
+		return 0;
+
+	spin_lock_irqsave(&info->domain->lock, flags);
+	list_del(&info->link);
+	spin_unlock_irqrestore(&info->domain->lock, flags);
+
+	domain_detach_reattached_iommu(info->domain, iommu);
+	info->domain = NULL;
+
+	return 0;
+}
+
 enum pasid_lu_op {
 	PASID_LU_OP_PRESERVE = 1,
 	PASID_LU_OP_UNPRESERVE,
@@ -671,9 +700,14 @@ void *intel_pasid_restore_table(struct device *dev, u64 max_pasid)
 	 */
 	BUG_ON(ser->intel.max_pasid != max_pasid);
 
+	if (ser->intel.restored)
+		goto out;
+
 	BUG_ON(pasid_lu_handle_pd(phys_to_virt(ser->intel.pasid_table),
 				  ser->intel.max_pasid,
 				  PASID_LU_OP_RESTORE));
+	ser->intel.restored = 1;
 
+out:
 	return phys_to_virt(ser->intel.pasid_table);
 }

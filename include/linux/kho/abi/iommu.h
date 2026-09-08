@@ -131,10 +131,13 @@ struct iommu_dev_map_ser {
 
 /**
  * struct iommu_device_intel_ser - Intel specific state of serialized device
+ * @restored: Whether the device state is restored
  * @pasid_table: Physical address of pasid table
  * @max_pasid: Maximum supported pasid
  */
 struct iommu_device_intel_ser {
+	u8 restored;
+	u8 padding[7];
 	u64 pasid_table;
 	u64 max_pasid;
 } __packed;
