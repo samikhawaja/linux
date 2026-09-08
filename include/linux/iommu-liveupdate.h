@@ -116,7 +116,7 @@ int iommu_preserve_device(struct iommu_domain *domain,
 			  struct device *dev, u64 dma_owner_token);
 void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
 void iommu_release_restored_device(struct device *dev);
-
+void iommu_finish_preserved_device(struct device *dev);
 /**
  * iommu_preserved_state() - Get preserved state of an IOMMU instance
  * @iommu: IOMMU hardware instance
@@ -204,6 +204,10 @@ static inline void iommu_release_restored_device(struct device *dev)
 static inline void *iommu_preserved_state(struct iommu_device *iommu)
 {
 	return NULL;
+}
+
+static inline void iommu_finish_preserved_device(struct device *dev)
+{
 }
 #endif
 #endif /* _LINUX_IOMMU_LIVEUPDATE_H */
