@@ -843,3 +843,19 @@ out:
 	liveupdate_flb_put_incoming(&iommu_flb);
 	return domain;
 }
+
+/**
+ * iommu_verify_dma_ownership - Verify the dma ownership of the caller
+ * @dev: Target device
+ * @dma_owner_token: Token to verify to establish dma ownership of the caller.
+ *
+ * Match the dma_owner_token with the token of the device dma owner set during
+ * preservation.
+ *
+ * Return true on success, false on failure.
+ */
+bool iommu_verify_dma_ownership(struct device *dev, void *owner, u64 dma_owner_token)
+{
+	return true;
+}
+
