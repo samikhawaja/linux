@@ -774,6 +774,7 @@ void iommu_finish_preserved_device(struct device *dev)
 	WRITE_ONCE(dev->iommu->device_ser, NULL);
 }
 
+/**
  * iommu_restore_domain() - Restore a preserved domain for a device
  * @dev: Target device
  * @ser: Serialized device state
