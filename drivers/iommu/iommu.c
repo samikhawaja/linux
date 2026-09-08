@@ -2468,6 +2468,16 @@ static int __iommu_device_set_domain(struct iommu_group *group,
 {
 	int ret;
 
+#if CONFIG_IOMMU_LIVEUPDATE
+	/* Restored devices do not move to core domain from restored domain. */
+	if (old_domain && dev_iommu_restored_state(dev)
+	    && iommu_domain_restored_state(old_domain) &&
+	    (new_domain == group->default_domain ||
+	     new_domain == group->blocking_domain))
+		return -EBUSY;
+
+#endif
+
 	/*
 	 * If the device requires IOMMU_RESV_DIRECT then we cannot allow
 	 * the blocking domain to be attached as it does not contain the

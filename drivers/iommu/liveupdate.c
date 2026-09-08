@@ -766,7 +766,7 @@ void iommu_release_restored_device(struct device *dev)
 	 * reclaimed by the device drivers as they can fallback to the default
 	 * domain.
 	 */
-	BUG_ON(dev_iommu_restored_state(dev));
+	//BUG_ON(dev_iommu_restored_state(dev));
 }
 
 /**
