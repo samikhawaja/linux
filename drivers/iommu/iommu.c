@@ -2265,6 +2265,12 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 	if (old)
 		atomic_dec(&old->attach_count);
 
+#if CONFIG_IOMMU_LIVEUPDATE
+	if (old && dev_iommu_restored_state(dev) &&
+	    iommu_domain_restored_state(old))
+		iommu_finish_preserved_device(dev);
+#endif
+
 	dev->iommu->attach_deferred = 0;
 	trace_attach_device_to_domain(dev);
 	return 0;
@@ -3641,7 +3647,7 @@ int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
 		goto unlock_out;
 	}
 
-	device_ser = dev_iommu_preserved_state(dev);
+	device_ser = dev_iommu_restored_state(dev);
 	if (device_ser->dma_owner_token != dma_owner_token)
 		return -EPERM;
 
@@ -4290,6 +4296,9 @@ int pci_dev_reset_iommu_prepare(struct pci_dev *pdev)
 	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
 		return 0;
 
+	if (dev_iommu_restored_state(&pdev->dev))
+		return 0;
+
 	guard(mutex)(&group->mutex);
 
 	gdev = __dev_to_gdev(&pdev->dev);
@@ -4399,6 +4408,9 @@ void pci_dev_reset_iommu_done(struct pci_dev *pdev)
 	void *entry;
 
 	if (!pci_ats_supported(pdev) || !dev_has_iommu(&pdev->dev))
+		return;
+
+	if (dev_iommu_restored_state(&pdev->dev))
 		return;
 
 	guard(mutex)(&group->mutex);

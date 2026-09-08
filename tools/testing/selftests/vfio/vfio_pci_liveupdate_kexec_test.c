@@ -136,15 +136,14 @@ static void before_kexec(int luo_fd)
 
 	dma_memfd_setup(device, session_fd);
 
-	struct iommu_hwpt_lu_set_preserve set_preserve = {
-		.size = sizeof(set_preserve),
+	struct iommu_hwpt_liveupdate_mark_preserve mark_preserve = {
+		.size = sizeof(mark_preserve),
 		.hwpt_token = HWPT_TOKEN,
-		.preserve = 1,
 	};
 
 	/* Mark the HWPT for preserved. */
-	set_preserve.hwpt_id = iommu_hwpt->hwpt_id;
-	ret = ioctl(iommu->iommufd, IOMMU_HWPT_LU_SET_PRESERVE, &set_preserve);
+	mark_preserve.hwpt_id = iommu_hwpt->hwpt_id;
+	ret = ioctl(iommu->iommufd, IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE, &mark_preserve);
 	VFIO_ASSERT_EQ(ret, 0);
 
 	printf("Preserving iommufd in session\n");
@@ -192,7 +191,7 @@ static void check_open_vfio_device_fails(void)
 
 static void after_kexec(int luo_fd, int state_session_fd)
 {
-	struct iommu_hwpt_lu_restore restore = {
+	struct iommu_hwpt_liveupdate_restore restore = {
 		.size = sizeof(restore),
 		.hwpt_token = HWPT_TOKEN,
 		.hwpt_alloc_flags = 0,
@@ -234,7 +233,7 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	VFIO_ASSERT_GE(iommufd, 0);
 
 	printf("Binding the device to an iommufd and setting it up\n");
-	dev_id = vfio_device_bind_iommufd(device_fd, iommufd);
+	dev_id = vfio_device_bind_iommufd(device_fd, iommufd, NULL);
 
 	/*
 	 * Create a new HWPT that is compatible with the device. This will be
@@ -257,7 +256,7 @@ static void after_kexec(int luo_fd, int state_session_fd)
 
 	dma_memfd_map(device, memfd);
 
-	ret = ioctl(iommufd, IOMMU_HWPT_LU_RESTORE, &restore);
+	ret = ioctl(iommufd, IOMMU_HWPT_LIVEUPDATE_RESTORE, &restore);
 	VFIO_ASSERT_TRUE(!ret);
 
 	/*
@@ -277,6 +276,7 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	}
 
 	/* Replace the preserved HWPT with the new HWPT. */
+	printf("Replacing preserved HWPT with a new HWPT\n");
 	vfio_pci_device_attach_iommu(device, iommu);
 
 	printf("Finishing the session\n");
