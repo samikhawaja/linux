@@ -688,8 +688,8 @@ DEFINE_MUTEX(iommu_probe_device_lock);
 
 static int __iommu_probe_device(struct device *dev, struct list_head *group_list)
 {
+	struct group_device *gdev, *gdev2;
 	struct iommu_group *group;
-	struct group_device *gdev;
 	int ret;
 
 	/*
@@ -723,6 +723,14 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 		goto err_put_group;
 	}
 
+	for_each_group_device(group, gdev2) {
+		if (dev_iommu_preserved_state(gdev2->dev) ||
+		    dev_iommu_restored_state(gdev2->dev)) {
+			ret = -EBUSY;
+			goto err_put_group;
+		}
+	}
+
 	/*
 	 * The gdev must be in the list before calling
 	 * iommu_setup_default_domain()
@@ -736,6 +744,10 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 						0);
 		if (ret)
 			goto err_remove_gdev;
+
+		if (dev_iommu_restored_state(dev) && group->owner_cnt &&
+		    iommu_is_liveupdate_dma_owner(group->owner))
+			group->owner_cnt++;
 	} else if (!group->default_domain && !group_list) {
 		ret = iommu_setup_default_domain(group, 0);
 		if (ret)
@@ -3785,6 +3797,27 @@ bool iommu_group_dma_owner_claimed(struct iommu_group *group)
 	return user;
 }
 EXPORT_SYMBOL_GPL(iommu_group_dma_owner_claimed);
+
+/**
+ * iommu_group_is_singleton() - Query if group contains exactly one device
+ * @group: The group.
+ *
+ * Return: true if group contains exactly 1 device, false otherwise.
+ */
+bool iommu_group_is_singleton(struct iommu_group *group)
+{
+	bool ret;
+
+	if (!group)
+		return false;
+
+	mutex_lock(&group->mutex);
+	ret = (list_count_nodes(&group->devices) == 1);
+	mutex_unlock(&group->mutex);
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(iommu_group_is_singleton);
 
 static void iommu_remove_dev_pasid(struct device *dev, ioasid_t pasid,
 				   struct iommu_domain *domain)

@@ -40,7 +40,7 @@ static inline void *dev_iommu_preserved_state(struct device *dev)
 	if (!dev->iommu)
 		return NULL;
 
-	ser = dev->iommu->device_ser;
+	ser = READ_ONCE(dev->iommu->device_ser);
 	if (ser && !(ser->hdr.flags & IOMMU_SER_FLAG_INCOMING))
 		return ser;
 

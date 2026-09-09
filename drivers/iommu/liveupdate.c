@@ -628,7 +628,7 @@ int iommu_preserve_device(struct iommu_domain *domain,
 		goto out_unlock;
 	}
 
-	if (iommu->device_ser) {
+	if (dev_iommu_preserved_state(dev)) {
 		ret = -EBUSY;
 		goto out_unlock;
 	}
@@ -652,14 +652,23 @@ int iommu_preserve_device(struct iommu_domain *domain,
 	device_ser->dma_owner_token = dma_owner_token;
 
 	ret = iommu->iommu_dev->ops->preserve_device(dev, device_ser);
+	if (!ret) {
+		WRITE_ONCE(dev->iommu->device_ser, device_ser);
+
+		/* Validate that no sibling device was added concurrently */
+		if (!iommu_group_is_singleton(dev->iommu_group)) {
+			dev->iommu->device_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
+			iommu->iommu_dev->ops->unpreserve_device(dev, device_ser);
+			WRITE_ONCE(dev->iommu->device_ser, NULL);
+			ret = -EOPNOTSUPP;
+		}
+	}
+
 	if (ret) {
 		device_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
 		iommu_unpreserve_locked(iommu->iommu_dev, flb_obj);
 		goto out_unlock;
 	}
-
-	dev->iommu->device_ser = device_ser;
-	ret = 0;
 
 out_unlock:
 	mutex_unlock(&flb_obj->lock);
@@ -702,7 +711,7 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev)
 
 	dev->iommu->device_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
 	iommu->iommu_dev->ops->unpreserve_device(dev, iommu_device_ser);
-	dev->iommu->device_ser = NULL;
+	WRITE_ONCE(dev->iommu->device_ser, NULL);
 
 	iommu_unpreserve_locked(iommu->iommu_dev, flb_obj);
 out_unlock:
