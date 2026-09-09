@@ -744,6 +744,10 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 						0);
 		if (ret)
 			goto err_remove_gdev;
+
+		if (dev_iommu_restored_state(dev) && group->owner_cnt &&
+		    iommu_is_liveupdate_dma_owner(group->owner))
+			group->owner_cnt++;
 	} else if (!group->default_domain && !group_list) {
 		ret = iommu_setup_default_domain(group, 0);
 		if (ret)
