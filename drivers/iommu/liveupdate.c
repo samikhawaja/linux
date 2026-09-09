@@ -67,6 +67,8 @@ struct iommu_flb_obj {
 	struct iommu_device_array_ser *curr_device_array;
 };
 
+static char iommu_liveupdate_dma_owner;
+
 static void *iommu_liveupdate_restore_array(u64 array_phys)
 {
 	struct iommu_array_hdr_ser *array_hdr;
@@ -800,7 +802,7 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 
 	domain_ser = phys_to_virt(ser->domain_iommu_ser.domain_phys);
 	if (domain_ser->restored_domain) {
-		*owner = ser;
+		*owner = &iommu_liveupdate_dma_owner;
 		domain = domain_ser->restored_domain;
 		goto out;
 	}
@@ -824,8 +826,8 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 		goto out;
 	}
 
-	/* The device is owned by the preserved state. */
-	*owner = ser;
+	/* The device is owned by liveupdate. */
+	*owner = &iommu_liveupdate_dma_owner;
 	domain->preserved_state = domain_ser;
 	domain_ser->restored_domain = domain;
 
@@ -838,15 +840,40 @@ out:
 /**
  * iommu_verify_dma_ownership - Verify the dma ownership of the caller
  * @dev: Target device
+ * @owner: Current dma owner of the device
  * @dma_owner_token: Token to verify to establish dma ownership of the caller.
  *
- * Match the dma_owner_token with the token of the device dma owner set during
- * preservation.
+ * Check if liveupdate is the dma owner of the device. If yes then match the
+ * dma_owner_token with the token of the dma owner set during preservation.
  *
  * Return true on success, false on failure.
  */
 bool iommu_verify_dma_ownership(struct device *dev, void *owner, u64 dma_owner_token)
 {
+	struct iommu_device_ser *device_ser;
+
+	if (owner != &iommu_liveupdate_dma_owner)
+		return false;
+
+	device_ser = dev_iommu_restored_state(dev);
+	if (!device_ser ||
+	    device_ser->dma_owner_token != dma_owner_token)
+		return false;
+
+	return true;
+}
+
+/**
+ * iommu_is_liveupdate_dma_owner - Check if liveupdate is the dma owner
+ * @owner: Current dma owner of the device
+ *
+ * Return true on success, false on failure.
+ */
+bool iommu_is_liveupdate_dma_owner(void *owner)
+{
+	if (owner != &iommu_liveupdate_dma_owner)
+		return false;
+
 	return true;
 }
 
