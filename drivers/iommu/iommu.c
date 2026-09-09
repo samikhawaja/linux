@@ -638,12 +638,20 @@ static void iommu_deinit_device(struct device *dev)
 						     group->domain)) {
 			update_attachment_count(release_domain, true);
 			update_attachment_count(group->domain, false);
-
 		}
 	}
 
-	if (ops->release_device)
+	if (ops->release_device) {
 		ops->release_device(dev);
+
+		/*
+		 * Restored devices are detached from restored domain if not
+		 * reclaimed.
+		 */
+		if (dev_iommu_restored_state(dev) &&
+		    iommu_domain_restored_state(group->domain))
+			update_attachment_count(group->domain, false);
+	}
 
 	/*
 	 * If this is the last driver to use the group then we must free the
