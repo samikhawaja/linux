@@ -463,24 +463,23 @@ err:
 	return ret;
 }
 
-int intel_iommu_detach_restored_device(struct iommu_domain *domain,
-				       struct device *dev)
+int intel_iommu_detach_restored_device(struct device *dev)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
+	struct iommu_domain *domain;
 	unsigned long flags;
 
-	iopf_for_domain_remove(info->domain ? &info->domain->domain : NULL, dev);
-	if (!info->domain_attached)
-		return 0;
+	if (!info->domain_attached || !info->domain)
+		return -EINVAL;
 
-	if (info->domain)
-		cache_tag_unassign_domain(info->domain, dev, IOMMU_NO_PASID);
+	domain = &info->domain->domain;
+	if (!iommu_domain_restored_state(domain))
+		return -EINVAL;
 
+	iopf_for_domain_remove(domain, dev);
+	cache_tag_unassign_domain(info->domain, dev, IOMMU_NO_PASID);
 	info->domain_attached = false;
-
-	if (!info->domain)
-		return 0;
 
 	spin_lock_irqsave(&info->domain->lock, flags);
 	list_del(&info->link);

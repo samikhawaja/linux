@@ -2797,7 +2797,7 @@ static int blocking_domain_attach_dev(struct iommu_domain *domain,
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 
 	if (dev_iommu_restored_state(dev))
-		return intel_iommu_detach_restored_device(domain, dev);
+		return -EPERM;
 
 	iopf_for_domain_remove(info->domain ? &info->domain->domain : NULL, dev);
 	device_block_translation(dev);
@@ -3400,12 +3400,16 @@ static void intel_iommu_release_device(struct device *dev)
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
 
-	iommu_disable_pci_pri(info);
-	iommu_disable_pci_ats(info);
+	if (!dev_iommu_restored_state(dev)) {
+		iommu_disable_pci_pri(info);
+		iommu_disable_pci_ats(info);
 
-	if (info->pasid_enabled) {
-		pci_disable_pasid(to_pci_dev(dev));
-		info->pasid_enabled = 0;
+		if (info->pasid_enabled) {
+			pci_disable_pasid(to_pci_dev(dev));
+			info->pasid_enabled = 0;
+		}
+	} else {
+		intel_iommu_detach_restored_device(dev);
 	}
 
 	mutex_lock(&iommu->iopf_lock);
@@ -3882,7 +3886,7 @@ static int identity_domain_attach_dev(struct iommu_domain *domain,
 	int ret;
 
 	if (dev_iommu_restored_state(dev))
-		return intel_iommu_detach_restored_device(domain, dev);
+		return -EPERM;
 
 	device_block_translation(dev);
 
