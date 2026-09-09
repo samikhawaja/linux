@@ -280,6 +280,18 @@ static int remove_iommu_group(struct device *dev, void *data)
 	return 0;
 }
 
+static void update_attachment_count(struct iommu_domain *domain, bool attach)
+{
+	if (!domain || domain->type == IOMMU_DOMAIN_BLOCKED
+	    || domain->type == IOMMU_DOMAIN_IDENTITY)
+		return;
+
+	if (attach)
+		atomic_inc(&domain->attach_count);
+	else
+		atomic_dec(&domain->attach_count);
+}
+
 /**
  * iommu_device_register() - Register an IOMMU hardware instance
  * @iommu: IOMMU handle for the instance
@@ -621,8 +633,12 @@ static void iommu_deinit_device(struct device *dev)
 		    release_domain == ops->blocked_domain)
 			release_domain = ops->identity_domain;
 
-		release_domain->ops->attach_dev(release_domain, dev,
-						group->domain);
+		if (!release_domain->ops->attach_dev(release_domain, dev,
+						     group->domain)) {
+			update_attachment_count(release_domain, true);
+			update_attachment_count(group->domain, false);
+
+		}
 	}
 
 	if (ops->release_device)
@@ -779,7 +795,7 @@ static void __iommu_group_remove_restored_device(struct iommu_group *group,
 	if (!device_ser)
 		return;
 
-	if (!group->owner_cnt || group->owner != device_ser)
+	if (!group->owner_cnt || !iommu_is_liveupdate_dma_owner(group->owner))
 		return;
 
 	if (group->owner_cnt > 1) {
@@ -2261,13 +2277,14 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 	if (ret)
 		return ret;
 
-	atomic_inc(&domain->attach_count);
-	if (old)
-		atomic_dec(&old->attach_count);
+	update_attachment_count(domain, true);
+	update_attachment_count(old, false);
 
 #if CONFIG_IOMMU_LIVEUPDATE
 	if (old && dev_iommu_restored_state(dev) &&
-	    iommu_domain_restored_state(old))
+	    iommu_domain_restored_state(old) &&
+	    domain->type != IOMMU_DOMAIN_BLOCKED &&
+	    domain->type != IOMMU_DOMAIN_IDENTITY)
 		iommu_finish_preserved_device(dev);
 #endif
 
@@ -2503,16 +2520,6 @@ static int __iommu_device_set_domain(struct iommu_group *group,
 				     unsigned int flags)
 {
 	int ret;
-
-#if CONFIG_IOMMU_LIVEUPDATE
-	/* Restored devices do not move to core domain from restored domain. */
-	if (old_domain && dev_iommu_restored_state(dev)
-	    && iommu_domain_restored_state(old_domain) &&
-	    (new_domain == group->default_domain ||
-	     new_domain == group->blocking_domain))
-		return -EBUSY;
-
-#endif
 
 	/*
 	 * If the device requires IOMMU_RESV_DIRECT then we cannot allow
@@ -3641,6 +3648,7 @@ int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
 {
 	/* Caller must be a probed driver on dev */
 	struct iommu_group *group = dev->iommu_group;
+	unsigned int current_owner_cnt;
 	void *current_owner;
 	int ret = 0;
 
@@ -3659,6 +3667,7 @@ int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
 
 	if (iommu_verify_dma_ownership(dev, group->owner, dma_owner_token)) {
 		current_owner = group->owner;
+		current_owner_cnt = group->owner_cnt;
 		group->owner_cnt = 0;
 
 		/* Try to reclaim ownership */
@@ -3666,7 +3675,7 @@ int iommu_device_reclaim_dma_owner(struct device *dev, void *owner,
 		if (ret) {
 			/* Restore the ownership if failed to reclaim. */
 			group->owner = current_owner;
-			group->owner_cnt = 1;
+			group->owner_cnt = current_owner_cnt;
 		}
 
 		goto unlock_out;
