@@ -621,7 +621,8 @@ static void iommu_deinit_device(struct device *dev)
 	 * Regardless, if a delayed attach never occurred, then the release
 	 * should still avoid touching any hardware configuration either.
 	 */
-	if (!dev->iommu->attach_deferred && ops->release_domain) {
+	if (!dev->iommu->attach_deferred && ops->release_domain &&
+	    !dev_iommu_restored_state(dev)) {
 		struct iommu_domain *release_domain = ops->release_domain;
 
 		/*
@@ -637,12 +638,20 @@ static void iommu_deinit_device(struct device *dev)
 						     group->domain)) {
 			update_attachment_count(release_domain, true);
 			update_attachment_count(group->domain, false);
-
 		}
 	}
 
-	if (ops->release_device)
+	if (ops->release_device) {
 		ops->release_device(dev);
+
+		/*
+		 * Restored devices are detached from restored domain if not
+		 * reclaimed.
+		 */
+		if (dev_iommu_restored_state(dev) &&
+		    iommu_domain_restored_state(group->domain))
+			update_attachment_count(group->domain, false);
+	}
 
 	/*
 	 * If this is the last driver to use the group then we must free the
@@ -795,14 +804,6 @@ static void __iommu_group_remove_restored_device(struct iommu_group *group,
 	} else {
 		group->owner_cnt = 0;
 		group->owner = NULL;
-
-		/*
-		 * Note that for the unreclaimed restored devices this is
-		 * considered device remove by the drivers so it only
-		 * decontructs the software state and on rescan the restored
-		 * device can be reattached to the restored domain.
-		 */
-		__iommu_group_set_domain_nofail(group, group->blocking_domain);
 	}
 }
 
@@ -824,7 +825,7 @@ static void __iommu_group_free_device(struct iommu_group *group,
 	if (list_empty(&group->devices))
 		WARN_ON(group->owner_cnt ||
 			(group->domain != group->default_domain &&
-			 group->domain != group->blocking_domain));
+			 !iommu_domain_restored_state(group->domain)));
 
 	kfree(grp_dev->name);
 	kfree(grp_dev);
