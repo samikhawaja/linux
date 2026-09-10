@@ -123,7 +123,28 @@ int vfio_iommufd_physical_bind(struct vfio_device *vdev,
 {
 	struct iommufd_device *idev;
 
+#ifdef CONFIG_LIVEUPDATE
+	if (vdev->restored_iommufd_file) {
+		struct iommufd_ctx *restored_ictx;
+
+		restored_ictx = iommufd_ctx_from_file(vdev->restored_iommufd_file);
+		if (IS_ERR(restored_ictx))
+			return PTR_ERR(restored_ictx);
+
+		/* Only the pointer is compared, so drop the reference now. */
+		iommufd_ctx_put(restored_ictx);
+		if (restored_ictx != ictx)
+			return -EPERM;
+
+		idev = iommufd_device_bind_restored(ictx, vdev->dev,
+						    out_device_id,
+						    vdev->restored_iommufd_token);
+	} else {
+		idev = iommufd_device_bind(ictx, vdev->dev, out_device_id);
+	}
+#else
 	idev = iommufd_device_bind(ictx, vdev->dev, out_device_id);
+#endif
 	if (IS_ERR(idev))
 		return PTR_ERR(idev);
 	vdev->iommufd_device = idev;

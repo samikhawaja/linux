@@ -532,23 +532,17 @@ vfio_pci_liveupdate_attach_incoming(struct vfio_pci_core_device *vdev,
 /*
  * A device preserved with its iommufd state can only be retrieved together
  * with that iommufd, so fetch it using the saved token and fail if it can't be
- * retrieved.
+ * retrieved. The reference to the iommufd file is kept until the device is
+ * finished, so that the device can only be bound to the restored iommufd.
  */
 static int vfio_pci_liveupdate_retrieve_iommufd(struct liveupdate_session *s,
-						const struct vfio_pci_core_device_ser *ser)
+						const struct vfio_pci_core_device_ser *ser,
+						struct file **filep)
 {
-	struct file *file;
-	int ret;
-
 	if (!IS_ENABLED(CONFIG_IOMMU_LIVEUPDATE))
 		return -EOPNOTSUPP;
 
-	ret = liveupdate_get_file_incoming(s, ser->iommufd_token, &file);
-	if (ret)
-		return ret;
-
-	fput(file);
-	return 0;
+	return liveupdate_get_file_incoming(s, ser->iommufd_token, filep);
 }
 
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
@@ -556,6 +550,7 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	struct pci_saved_state *saved_state = NULL;
 	const struct vfio_pci_core_device_ser *ser;
 	struct vfio_pci_liveupdate_incoming *in;
+	struct file *iommufd_file = NULL;
 	struct vfio_pci_core_device *vdev;
 	struct vfio_device *device;
 	struct pci_dev *pdev;
@@ -579,7 +574,8 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	pdev = vdev->pdev;
 
 	if (ser->flags & VFIO_PCI_SER_IOMMUFD) {
-		ret = vfio_pci_liveupdate_retrieve_iommufd(args->session, ser);
+		ret = vfio_pci_liveupdate_retrieve_iommufd(args->session, ser,
+							   &iommufd_file);
 		if (ret)
 			goto out_put_dev;
 	} else if (!vfio_device_is_noiommu(device)) {
@@ -590,14 +586,14 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	if (!pci_liveupdate_is_incoming(pdev) ||
 	    ser->cfg_size != pdev->cfg_size) {
 		ret = -EINVAL;
-		goto out_put_dev;
+		goto out_put_iommufd;
 	}
 
 	if (ser->saved_state_size) {
 		saved_state = vfio_pci_liveupdate_parse_saved_state(pdev, ser);
 		if (IS_ERR(saved_state)) {
 			ret = PTR_ERR(saved_state);
-			goto out_put_dev;
+			goto out_put_iommufd;
 		}
 	}
 
@@ -623,6 +619,10 @@ static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 	if (ret)
 		goto out_fput;
 
+	if (iommufd_file) {
+		device->restored_iommufd_token = ser->iommufd_token;
+		device->restored_iommufd_file = iommufd_file;
+	}
 	args->file = file;
 	vfio_device_put_registration(device);
 	return 0;
@@ -633,6 +633,9 @@ out_free_in:
 	kfree(in);
 out_free_saved:
 	kfree(saved_state);
+out_put_iommufd:
+	if (iommufd_file)
+		fput(iommufd_file);
 out_put_dev:
 	vfio_device_put_registration(device);
 	return ret;
@@ -762,6 +765,12 @@ static void vfio_pci_liveupdate_finish(struct liveupdate_file_op_args *args)
 		vdev = container_of(device, struct vfio_pci_core_device, vdev);
 		vfio_pci_liveupdate_finish_vdev(vdev, ser,
 						"retrieved but not opened");
+
+		device->restored_iommufd_token = 0;
+		if (device->restored_iommufd_file) {
+			fput(device->restored_iommufd_file);
+			device->restored_iommufd_file = NULL;
+		}
 	} else {
 		reason = args->retrieve_status ? "retrieve failed" : "not retrieved";
 		device = vfio_pci_liveupdate_finish_lookup(ser);

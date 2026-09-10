@@ -79,6 +79,11 @@ struct vfio_device {
 	 * which must be set prior to registering the vfio_device.
 	 */
 	struct dentry *debug_root;
+
+#ifdef CONFIG_LIVEUPDATE
+	u64 restored_iommufd_token;
+	struct file *restored_iommufd_file;
+#endif
 };
 
 /**
