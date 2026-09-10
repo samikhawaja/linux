@@ -223,7 +223,8 @@ void iommufd_device_destroy(struct iommufd_object *obj)
 		iommufd_ctx_put(idev->ictx);
 }
 
-static int iommufd_bind_iommu(struct iommufd_device *idev)
+static int iommufd_bind_iommu(struct iommufd_device *idev,
+			      u64 preserved_iommufd_token)
 {
 	struct iommufd_ctx *ictx = idev->ictx;
 	struct device *dev = idev->dev;
@@ -261,9 +262,23 @@ static int iommufd_bind_iommu(struct iommufd_device *idev)
 			"Use the \"allow_unsafe_interrupts\" module parameter to override\n");
 	}
 
-	rc = iommu_device_claim_dma_owner(dev, ictx);
-	if (rc)
-		goto out_group_put;
+	/* If restoring, try to reclaim dma ownership. */
+	rc = -EINVAL;
+	if (preserved_iommufd_token) {
+		if (!ictx->serialized_data) {
+			rc = -EPERM;
+			goto out_group_put;
+		}
+
+		rc = iommu_device_reclaim_dma_owner(dev, ictx, preserved_iommufd_token);
+	}
+
+	/* Fallback to normal claim dma owner if restoring. */
+	if (rc) {
+		rc = iommu_device_claim_dma_owner(dev, ictx);
+		if (rc)
+			goto out_group_put;
+	}
 
 	/* igroup refcount moves into iommufd_device */
 	idev->igroup = igroup;
@@ -297,6 +312,7 @@ static int iommufd_bind_noiommu(struct iommufd_device *idev)
  * @ictx: iommufd file descriptor
  * @dev: Pointer to a physical device struct
  * @id: Output ID number to return to userspace for this device
+ * @preserved_iommufd_token: Token of the preserved iommufd if restoring.
  *
  * A successful bind establishes an ownership over the device and returns
  * struct iommufd_device pointer, otherwise returns error pointer.
@@ -309,7 +325,8 @@ static int iommufd_bind_noiommu(struct iommufd_device *idev)
  * The caller must undo this with iommufd_device_unbind()
  */
 struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
-					   struct device *dev, u32 *id)
+					   struct device *dev, u32 *id,
+					   u64 preserved_iommufd_token)
 {
 	struct iommufd_device *idev;
 	int rc;
@@ -322,7 +339,7 @@ struct iommufd_device *iommufd_device_bind(struct iommufd_ctx *ictx,
 	idev->dev = dev;
 
 	if (!iommufd_device_is_noiommu(idev))
-		rc = iommufd_bind_iommu(idev);
+		rc = iommufd_bind_iommu(idev, preserved_iommufd_token);
 	else
 		rc = iommufd_bind_noiommu(idev);
 	if (rc)
