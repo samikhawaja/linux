@@ -80,6 +80,63 @@ int pci_prepare_ats(struct pci_dev *dev, int ps)
 }
 EXPORT_SYMBOL_GPL(pci_prepare_ats);
 
+static void pci_force_disable_ats(struct pci_dev *dev)
+{
+	u16 ctrl;
+	int pos;
+
+	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ATS);
+	if (!pos)
+		return;
+
+	pci_read_config_word(dev, pos + PCI_ATS_CTRL, &ctrl);
+	ctrl &= ~PCI_ATS_CTRL_ENABLE;
+	pci_write_config_word(dev, pos + PCI_ATS_CTRL, ctrl);
+	dev->ats_enabled = 0;
+}
+
+/**
+ * pci_liveupdate_adopt_ats - Adopt the ATS capability state from previous
+ * kernel
+ * @dev: the PCI device
+ * @ps: the IOMMU page shift
+ * @enabled: Whether ATS is already enabled from the previous kernel
+ *
+ * Returns true if enabled, false if disabled.
+ */
+bool pci_liveupdate_adopt_ats(struct pci_dev *dev, int ps, bool enabled)
+{
+	struct pci_dev *pdev;
+	u16 ctrl;
+
+	if (!enabled)
+		return false;
+
+	if (!pci_ats_supported(dev) || ps < PCI_ATS_MIN_STU)
+		goto force_disable;
+
+	ctrl = PCI_ATS_CTRL_ENABLE;
+	if (dev->is_virtfn) {
+		pdev = pci_physfn(dev);
+		if (pdev->ats_stu != ps)
+			goto force_disable;
+	} else {
+		dev->ats_stu = ps;
+		ctrl |= PCI_ATS_CTRL_STU(dev->ats_stu - PCI_ATS_MIN_STU);
+	}
+	pci_write_config_word(dev, dev->ats_cap + PCI_ATS_CTRL, ctrl);
+
+	dev->ats_enabled = 1;
+	return true;
+
+force_disable:
+	pci_warn(dev, "ATS was enabled in previous kernel but disabled in this kernel.");
+	WARN_ON_ONCE(enabled);
+	pci_force_disable_ats(dev);
+	return false;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_adopt_ats);
+
 /**
  * pci_enable_ats - enable the ATS capability
  * @dev: the PCI device

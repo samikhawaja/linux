@@ -3333,7 +3333,9 @@ static struct iommu_device *intel_iommu_probe_device(struct device *dev)
 
 	dev_iommu_priv_set(dev, info);
 	if (pdev && pci_ats_supported(pdev)) {
-		pci_prepare_ats(pdev, VTD_PAGE_SHIFT);
+		if (!dev_iommu_restored_state(dev))
+			pci_prepare_ats(pdev, VTD_PAGE_SHIFT);
+
 		ret = device_rbtree_insert(iommu, info);
 		if (ret)
 			goto free;
@@ -3370,6 +3372,9 @@ static void intel_iommu_probe_finalize(struct device *dev)
 {
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
+
+	if (dev_iommu_restored_state(info->dev))
+		return;
 
 	/*
 	 * The PCIe spec, in its wisdom, declares that the behaviour of the
