@@ -172,6 +172,9 @@ static int clear_unpreserve_context_entry_fn(struct device *dev,
 	 * live update. There is no need to disable these for DMA aliases.
 	 */
 	if (sm_supported(info->iommu)) {
+		if (info->pri_enabled)
+			pci_disable_pri(to_pci_dev(dev));
+
 		/*
 		 * The iommu lock is not needed as the context tables are never
 		 * removed and the new ones are not added during shutdown.
@@ -423,6 +426,88 @@ err_unlock:
 	return ret;
 }
 
+static int disable_ats_alias(struct pci_dev *pdev, u16 alias, void *data)
+{
+	struct device_domain_info *info = data;
+	struct context_entry *context;
+	struct dmar_domain *domain;
+	struct intel_iommu *iommu;
+	u8 bus = PCI_BUS_NUM(alias);
+	u8 devfn = alias & 0xff;
+	u16 did;
+
+	context = iommu_context_addr(info->iommu, bus, devfn, 0);
+	if (!context)
+		return 0;
+
+	if (!sm_supported(info->iommu))
+		context_set_translation_type(context, CONTEXT_TT_MULTI_LEVEL);
+	else
+		context_clear_sm_dte(context);
+	__iommu_flush_cache(info->iommu, context, sizeof(*context));
+
+	/*
+	 * Invalidations for context entry change as per 6.5.3.3:
+	 *
+	 * - Device-selective context-cache invalidation
+	 * - Domain-selective PASID-cache invalidation to affected domains
+	 * - Domain-selective IOTLB invalidation to affected domains
+	 * - Global Device-TLB invalidation to affected functions
+	 *
+	 * Note that the device TLB invalidation can be skipped if ATS was
+	 * enabled in previous kernel and disabled in this kernel at device
+	 * level. This is because as per the PCI specs devices are supposed to
+	 * invalidate the device TLB when ATS is disabled.
+	 */
+	domain = info->domain;
+	iommu = info->iommu;
+	did = domain_id_iommu(domain, iommu);
+
+	iommu->flush.flush_context(iommu, did, PCI_DEVID(bus, devfn),
+				   DMA_CCMD_MASK_NOBIT, DMA_CCMD_DEVICE_INVL);
+	if (sm_supported(iommu))
+		qi_flush_pasid_cache(iommu, did, QI_PC_ALL_PASIDS, 0);
+
+	iommu->flush.flush_iotlb(iommu, did, 0, 0, DMA_TLB_DSI_FLUSH);
+
+	return 0;
+}
+
+static void intel_iommu_restore_pci_ats(struct device_domain_info *info,
+					struct iommu_device_ser *device_ser)
+{
+	struct pci_dev *pdev;
+	bool enabled;
+
+	if (!info->dev || !dev_is_pci(info->dev))
+		return;
+
+	pdev = to_pci_dev(info->dev);
+	enabled = device_ser->intel.ats_enabled;
+	if (!enabled)
+		goto disable_ats;
+
+
+	/*
+	 * Note that pci_liveupdate_adopt_ats() might force disable ATS if it is
+	 * disabled in the new kernel globally. In that case a device TLB
+	 * invalidation is not needed because as per PCI spec when ATS is
+	 * disabled device is supposed to invalidate the device TLB.
+	 */
+	info->ats_enabled = pci_liveupdate_adopt_ats(pdev, VTD_PAGE_SHIFT, enabled);
+
+disable_ats:
+	/*
+	 * Disable ATS in context entries if it could not be enabled at the
+	 * device level or it was disabled in previous kernel.
+	 */
+	if (!info->ats_enabled) {
+		pci_for_each_dma_alias(to_pci_dev(info->dev),
+				       disable_ats_alias, info);
+		info->ats_supported = false;
+	}
+}
+
 /**
  * intel_iommu_restore_device() - Restore device domain attachment after live update
  * @domain: Restored domain
@@ -456,8 +541,11 @@ int intel_iommu_restore_device(struct iommu_domain *domain,
 	list_add(&info->link, &dmar_domain->devices);
 	spin_unlock_irqrestore(&dmar_domain->lock, flags);
 
-	if (!sm_supported(iommu))
-		intel_iommu_enable_pci_ats(info);
+	/*
+	 * Restored domain is attach during probe, so this can be done here for
+	 * both legacy and scalable mode.
+	 */
+	intel_iommu_restore_pci_ats(info, device_ser);
 
 	ret = cache_tag_assign_domain(dmar_domain, dev, IOMMU_NO_PASID);
 	if (ret)
@@ -541,6 +629,7 @@ int intel_iommu_preserve_device(struct device *dev,
 	if (ret)
 		return ret;
 
+	device_ser->intel.ats_enabled = info->ats_enabled;
 	device_ser->domain_iommu_ser.attachment_id = domain_id_iommu(info->domain,
 								     info->iommu);
 	return 0;
