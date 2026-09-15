@@ -426,9 +426,11 @@ err_unlock:
 	return ret;
 }
 
-static int disable_ats_alias(struct pci_dev *pdev, u16 alias, void *data)
+static int update_ats_alias(struct pci_dev *pdev, u16 alias,
+			    void *data, bool enable)
 {
 	struct device_domain_info *info = data;
+	int tt = CONTEXT_TT_MULTI_LEVEL;
 	struct context_entry *context;
 	struct dmar_domain *domain;
 	struct intel_iommu *iommu;
@@ -440,10 +442,20 @@ static int disable_ats_alias(struct pci_dev *pdev, u16 alias, void *data)
 	if (!context)
 		return 0;
 
-	if (!sm_supported(info->iommu))
-		context_set_translation_type(context, CONTEXT_TT_MULTI_LEVEL);
-	else
-		context_clear_sm_dte(context);
+	/*
+	 * Passthrough devices/domains are not preserved so the existing
+	 * translation type can only be multi-level or dev_iotlb.
+	 */
+	if (!sm_supported(info->iommu)) {
+		if (enable)
+			tt = CONTEXT_TT_DEV_IOTLB;
+		context_set_translation_type(context, tt);
+	} else {
+		if (enable)
+			context_set_sm_dte(context);
+		else
+			context_clear_sm_dte(context);
+	}
 	__iommu_flush_cache(info->iommu, context, sizeof(*context));
 
 	/*
@@ -473,20 +485,37 @@ static int disable_ats_alias(struct pci_dev *pdev, u16 alias, void *data)
 	return 0;
 }
 
+static int disable_ats_alias(struct pci_dev *pdev, u16 alias, void *data)
+{
+	return update_ats_alias(pdev, alias, data, false);
+}
+
+static int enable_ats_alias(struct pci_dev *pdev, u16 alias, void *data)
+{
+	return update_ats_alias(pdev, alias, data, true);
+}
+
 static void intel_iommu_restore_pci_ats(struct device_domain_info *info,
 					struct iommu_device_ser *device_ser)
 {
 	struct pci_dev *pdev;
-	bool enabled;
 
 	if (!info->dev || !dev_is_pci(info->dev))
 		return;
 
 	pdev = to_pci_dev(info->dev);
-	enabled = device_ser->intel.ats_enabled;
-	if (!enabled)
-		goto disable_ats;
 
+	/*
+	 * Enable ATS in the context entries if it is supported in the current
+	 * kernel and was not supported in the previous kernel.
+	 *
+	 * Note ATS cannot be disabled in the context entries here, if it is not
+	 * supported in the current kernel, without first disabling it at PCI
+	 * level.
+	 */
+	if (info->ats_supported && !device_ser->intel.ats_supported)
+		pci_for_each_dma_alias(to_pci_dev(info->dev),
+				       enable_ats_alias, info);
 
 	/*
 	 * Note that pci_liveupdate_adopt_ats() might force disable ATS if it is
@@ -494,18 +523,18 @@ static void intel_iommu_restore_pci_ats(struct device_domain_info *info,
 	 * invalidation is not needed because as per PCI spec when ATS is
 	 * disabled device is supposed to invalidate the device TLB.
 	 */
-	info->ats_enabled = pci_liveupdate_adopt_ats(pdev, VTD_PAGE_SHIFT, enabled);
+	info->ats_enabled = pci_liveupdate_adopt_ats(pdev, VTD_PAGE_SHIFT, info->ats_supported);
 
-disable_ats:
 	/*
-	 * Disable ATS in context entries if it could not be enabled at the
-	 * device level or it was disabled in previous kernel.
+	 * Disable ATS in the context entries if it is not supported in the
+	 * current kernel and it was supported in the previous kernel.
 	 */
-	if (!info->ats_enabled) {
+	if (!info->ats_supported && device_ser->intel.ats_supported)
 		pci_for_each_dma_alias(to_pci_dev(info->dev),
 				       disable_ats_alias, info);
-		info->ats_supported = false;
-	}
+
+	if (device_ser->intel.ats_enabled && !info->ats_enabled)
+		dev_warn_once(&pdev->dev, "ATS was enabled in previous kernel but disable now\n");
 }
 
 /**
@@ -542,8 +571,8 @@ int intel_iommu_restore_device(struct iommu_domain *domain,
 	spin_unlock_irqrestore(&dmar_domain->lock, flags);
 
 	/*
-	 * Restored domain is attach during probe, so this can be done here for
-	 * both legacy and scalable mode.
+	 * Restored domain is attached during probe, so this can be done here
+	 * for both legacy and scalable mode.
 	 */
 	intel_iommu_restore_pci_ats(info, device_ser);
 
@@ -630,6 +659,7 @@ int intel_iommu_preserve_device(struct device *dev,
 		return ret;
 
 	device_ser->intel.ats_enabled = info->ats_enabled;
+	device_ser->intel.ats_supported = info->ats_supported;
 	device_ser->domain_iommu_ser.attachment_id = domain_id_iommu(info->domain,
 								     info->iommu);
 	return 0;

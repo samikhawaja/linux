@@ -3373,9 +3373,6 @@ static void intel_iommu_probe_finalize(struct device *dev)
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
 
-	if (dev_iommu_restored_state(info->dev))
-		return;
-
 	/*
 	 * The PCIe spec, in its wisdom, declares that the behaviour of the
 	 * device is undefined if you enable PASID support after ATS support.
@@ -3385,6 +3382,9 @@ static void intel_iommu_probe_finalize(struct device *dev)
 	if (info->pasid_supported &&
 	    !pci_enable_pasid(to_pci_dev(dev), info->pasid_supported & ~1))
 		info->pasid_enabled = 1;
+
+	if (dev_iommu_restored_state(info->dev))
+		return;
 
 	if (sm_supported(iommu) && !dev_is_real_dma_subdevice(dev)) {
 		intel_iommu_enable_pci_ats(info);

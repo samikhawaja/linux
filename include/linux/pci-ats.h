@@ -8,7 +8,7 @@
 /* Address Translation Service */
 bool pci_ats_supported(struct pci_dev *dev);
 int pci_enable_ats(struct pci_dev *dev, int ps);
-bool pci_liveupdate_adopt_ats(struct pci_dev *dev, int ps, bool enabled);
+bool pci_liveupdate_adopt_ats(struct pci_dev *dev, int ps, bool enable);
 int pci_prepare_ats(struct pci_dev *dev, int ps);
 void pci_disable_ats(struct pci_dev *dev);
 int pci_ats_queue_depth(struct pci_dev *dev);
@@ -20,7 +20,7 @@ static inline bool pci_ats_supported(struct pci_dev *d)
 static inline int pci_enable_ats(struct pci_dev *d, int ps)
 { return -ENODEV; }
 static inline bool pci_liveupdate_adopt_ats(struct pci_dev *dev,
-					    int ps, bool enabled)
+					    int ps, bool enable)
 { return false; }
 static inline int pci_prepare_ats(struct pci_dev *dev, int ps)
 { return -ENODEV; }

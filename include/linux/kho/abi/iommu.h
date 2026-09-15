@@ -132,10 +132,12 @@ struct iommu_dev_map_ser {
 /**
  * struct iommu_device_intel_ser - Intel specific state of serialized device
  * @ats_enabled: Whether ATS was enabled in the previous kernel.
+ * @ats_supported: Whether ATS was supported in the previous kernel.
  */
 struct iommu_device_intel_ser {
 	u8 ats_enabled;
-	u8 padding[7];
+	u8 ats_supported;
+	u8 padding[6];
 } __packed;
 
 /**
