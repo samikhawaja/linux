@@ -148,6 +148,7 @@
 #include <linux/mm.h>
 #include <linux/mutex.h>
 #include <linux/pci.h>
+#include <linux/pci-ats.h>
 #include <linux/slab.h>
 
 #include "liveupdate.h"
@@ -889,6 +890,89 @@ bool pci_liveupdate_is_outgoing(struct pci_dev *dev)
 	pci_WARN_ONCE(dev, !dev->liveupdate.frozen, "Preservation status is unstable!\n");
 	return dev->liveupdate.outgoing;
 }
+
+#ifdef CONFIG_PCI_ATS
+static void pci_force_disable_ats(struct pci_dev *dev)
+{
+	u16 ctrl;
+	int pos;
+
+	pos = pci_find_ext_capability(dev, PCI_EXT_CAP_ID_ATS);
+	if (!pos)
+		return;
+
+	if (pci_read_config_word(dev, pos + PCI_ATS_CTRL, &ctrl))
+		return;
+
+	ctrl &= ~PCI_ATS_CTRL_ENABLE;
+	pci_write_config_word(dev, pos + PCI_ATS_CTRL, ctrl);
+	dev->ats_enabled = 0;
+}
+
+/**
+ * pci_liveupdate_adopt_ats - Adopt ATS state from the previous kernel
+ * @dev: the PCI device
+ * @ps: the IOMMU page shift
+ * @enable: whether ATS is to be enabled in this kernel
+ *
+ * ATS is not reset by Live Update, so a device may have ATS already enabled.
+ * The current ATS state is read back from the ATS Control register and adopted
+ * based on whether the ATS needs to be enabled or disabled in this kernel.
+ *
+ * Return: true if ATS is enabled, false if it is disabled.
+ */
+bool pci_liveupdate_adopt_ats(struct pci_dev *dev, int ps, bool enable)
+{
+	struct pci_dev *pdev;
+	int current_ps;
+	bool enabled;
+	u16 ctrl;
+
+	if (!enable || !pci_ats_supported(dev) || ps < PCI_ATS_MIN_STU)
+		goto force_disable;
+
+	if (pci_read_config_word(dev, dev->ats_cap + PCI_ATS_CTRL, &ctrl))
+		goto force_disable;
+
+	/*
+	 * If ATS was enabled in the previous kernel and a different stu was
+	 * used then force disable it in the current kernel.
+	 */
+	current_ps = PCI_ATS_CTRL_STU(ctrl) + PCI_ATS_MIN_STU;
+	enabled = ctrl & PCI_ATS_CTRL_ENABLE;
+	if (enabled && current_ps != ps)
+		goto force_disable;
+
+	ctrl = PCI_ATS_CTRL_ENABLE;
+	if (dev->is_virtfn) {
+		pdev = pci_physfn(dev);
+		if (pdev->ats_stu != ps)
+			goto force_disable;
+	} else {
+		dev->ats_stu = ps;
+		ctrl |= PCI_ATS_CTRL_STU(dev->ats_stu - PCI_ATS_MIN_STU);
+	}
+
+	if (!enabled)
+		pci_write_config_word(dev, dev->ats_cap + PCI_ATS_CTRL, ctrl);
+
+	dev->ats_enabled = 1;
+	return true;
+
+force_disable:
+	pci_force_disable_ats(dev);
+
+	/*
+	 * Once ATS is disabled, prepare the ATS for PFs as it would be done
+	 * during a normal boot.
+	 */
+	if (!dev->is_virtfn)
+		pci_prepare_ats(dev, ps);
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_adopt_ats);
+#endif /* CONFIG_PCI_ATS */
 
 /**
  * pci_liveupdate_is_incoming() - Check if a device is incoming-preserved

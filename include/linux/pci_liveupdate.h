@@ -74,4 +74,14 @@ static inline bool pci_liveupdate_is_incoming(struct pci_dev *dev)
 }
 #endif
 
+#if defined(CONFIG_PCI_LIVEUPDATE) && defined(CONFIG_PCI_ATS)
+bool pci_liveupdate_adopt_ats(struct pci_dev *dev, int ps, bool enable);
+#else
+static inline bool pci_liveupdate_adopt_ats(struct pci_dev *dev,
+					    int ps, bool enable)
+{
+	return false;
+}
+#endif
+
 #endif /* LINUX_PCI_LIVEUPDATE_H */
