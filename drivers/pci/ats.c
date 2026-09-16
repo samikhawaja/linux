@@ -96,17 +96,16 @@ static void pci_force_disable_ats(struct pci_dev *dev)
 }
 
 /**
- * pci_liveupdate_adopt_ats - Adopt the ATS capability state from previous
- * kernel
+ * pci_liveupdate_adopt_ats - Adopt ATS state from the previous kernel
  * @dev: the PCI device
  * @ps: the IOMMU page shift
- * @enable: Whether ATS needs to be enabled in this kernel
+ * @enable: whether ATS is to be enabled in this kernel
  *
- * Reads the current ATS state from the config space, if there is a mismatch in
- * the kernel configuration it force disables the ATS on the device.  Otherwise
- * it tries to adopt the ATS state from the previous kernel.
+ * ATS is not reset by live update, so a device may have ATS already enabled.
+ * The current ATS state is read back from the ATS Control register and adopted
+ * based on whether the ATS needs to be enabled or disabled in this kernel.
  *
- * Returns true if enabled, false if disabled.
+ * Return: true if ATS is enabled, false if it is disabled.
  */
 bool pci_liveupdate_adopt_ats(struct pci_dev *dev, int ps, bool enable)
 {
@@ -125,7 +124,7 @@ bool pci_liveupdate_adopt_ats(struct pci_dev *dev, int ps, bool enable)
 	 * If ATS was enabled in the previous kernel and a different stu was
 	 * used then force disable it in the current kernel.
 	 */
-	current_ps = PCI_ATS_CTRL_STU(dev->ats_cap) + PCI_ATS_MIN_STU;
+	current_ps = PCI_ATS_CTRL_STU(ctrl) + PCI_ATS_MIN_STU;
 	enabled = ctrl & PCI_ATS_CTRL_ENABLE;
 	if (enabled && current_ps != ps)
 		goto force_disable;
@@ -147,10 +146,15 @@ bool pci_liveupdate_adopt_ats(struct pci_dev *dev, int ps, bool enable)
 	return true;
 
 force_disable:
-	if (dev->is_virtfn)
-		dev->ats_stu = ps;
-
 	pci_force_disable_ats(dev);
+
+	/*
+	 * Once ATS is disabled, prepare the ATS for PFs as it would be done
+	 * during a normal boot.
+	 */
+	if (!dev->is_virtfn)
+		pci_prepare_ats(dev, ps);
+
 	return false;
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_adopt_ats);

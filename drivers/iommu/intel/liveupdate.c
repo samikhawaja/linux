@@ -430,7 +430,6 @@ static int update_ats_alias(struct pci_dev *pdev, u16 alias,
 			    void *data, bool enable)
 {
 	struct device_domain_info *info = data;
-	int tt = CONTEXT_TT_MULTI_LEVEL;
 	struct context_entry *context;
 	struct dmar_domain *domain;
 	struct intel_iommu *iommu;
@@ -447,9 +446,9 @@ static int update_ats_alias(struct pci_dev *pdev, u16 alias,
 	 * translation type can only be multi-level or dev_iotlb.
 	 */
 	if (!sm_supported(info->iommu)) {
-		if (enable)
-			tt = CONTEXT_TT_DEV_IOTLB;
-		context_set_translation_type(context, tt);
+		context_set_translation_type(context,
+					     enable ? CONTEXT_TT_DEV_IOTLB :
+						      CONTEXT_TT_MULTI_LEVEL);
 	} else {
 		if (enable)
 			context_set_sm_dte(context);
@@ -514,8 +513,7 @@ static void intel_iommu_restore_pci_ats(struct device_domain_info *info,
 	 * level.
 	 */
 	if (info->ats_supported && !device_ser->intel.ats_supported)
-		pci_for_each_dma_alias(to_pci_dev(info->dev),
-				       enable_ats_alias, info);
+		pci_for_each_dma_alias(pdev, enable_ats_alias, info);
 
 	/*
 	 * Note that pci_liveupdate_adopt_ats() might force disable ATS if it is
@@ -530,8 +528,7 @@ static void intel_iommu_restore_pci_ats(struct device_domain_info *info,
 	 * current kernel and it was supported in the previous kernel.
 	 */
 	if (!info->ats_supported && device_ser->intel.ats_supported)
-		pci_for_each_dma_alias(to_pci_dev(info->dev),
-				       disable_ats_alias, info);
+		pci_for_each_dma_alias(pdev, disable_ats_alias, info);
 
 	if (device_ser->intel.ats_enabled && !info->ats_enabled)
 		dev_warn_once(&pdev->dev, "ATS was enabled in previous kernel but disable now\n");
