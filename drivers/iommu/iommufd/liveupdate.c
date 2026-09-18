@@ -359,11 +359,15 @@ int iommufd_liveupdate_register(void)
 
 	ret = liveupdate_register_file_handler(&iommufd_ser_handler);
 	if (ret)
-		return ret;
+		goto out;
 
 	ret = iommu_liveupdate_register_flb(&iommufd_ser_handler);
 	if (ret)
 		liveupdate_unregister_file_handler(&iommufd_ser_handler);
+
+out:
+	if (ret == -EOPNOTSUPP)
+		return 0;
 
 	return ret;
 }
