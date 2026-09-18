@@ -703,7 +703,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 		if (dev_iommu_preserved_state(gdev2->dev) ||
 		    dev_iommu_restored_state(gdev2->dev)) {
 			ret = -EBUSY;
-			goto err_put_group;
+			goto err_free_gdev;
 		}
 	}
 
@@ -743,6 +743,7 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 
 err_remove_gdev:
 	list_del(&gdev->list);
+err_free_gdev:
 	__iommu_group_free_device(group, gdev);
 err_put_group:
 	iommu_deinit_device(dev);
