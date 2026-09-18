@@ -3300,7 +3300,8 @@ static struct iommu_device *intel_iommu_probe_device(struct device *dev)
 	info->iommu = iommu;
 	RB_CLEAR_NODE(&info->node);
 	if (dev_is_pci(dev)) {
-		if (ecap_dev_iotlb_support(iommu->ecap) &&
+		if (!dev_iommu_restored_state(dev) &&
+		    ecap_dev_iotlb_support(iommu->ecap) &&
 		    pci_ats_supported(pdev) &&
 		    dmar_ats_supported(pdev, iommu)) {
 			info->ats_supported = 1;
@@ -3333,9 +3334,7 @@ static struct iommu_device *intel_iommu_probe_device(struct device *dev)
 
 	dev_iommu_priv_set(dev, info);
 	if (pdev && pci_ats_supported(pdev)) {
-		if (!dev_iommu_restored_state(dev))
-			pci_prepare_ats(pdev, VTD_PAGE_SHIFT);
-
+		pci_prepare_ats(pdev, VTD_PAGE_SHIFT);
 		ret = device_rbtree_insert(iommu, info);
 		if (ret)
 			goto free;
@@ -3373,9 +3372,6 @@ static void intel_iommu_probe_finalize(struct device *dev)
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
 	struct intel_iommu *iommu = info->iommu;
 
-	if (dev_iommu_restored_state(info->dev))
-		goto enable_pri;
-
 	/*
 	 * The PCIe spec, in its wisdom, declares that the behaviour of the
 	 * device is undefined if you enable PASID support after ATS support.
@@ -3397,8 +3393,6 @@ static void intel_iommu_probe_finalize(struct device *dev)
 				iommu_disable_pci_ats(info);
 		}
 	}
-
-enable_pri:
 	iommu_enable_pci_pri(info);
 }
 

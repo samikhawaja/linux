@@ -1000,15 +1000,6 @@ context_set_sm_rid2pasid(struct context_entry *context, unsigned long pasid)
 }
 
 /*
- * Clear the DTE(Device-TLB Enable) field of a scalable mode context
- * entry.
- */
-static inline void context_clear_sm_dte(struct context_entry *context)
-{
-	context->lo &= ~BIT_ULL(2);
-}
-
-/*
  * Set the DTE(Device-TLB Enable) field of a scalable mode context
  * entry.
  */
@@ -1024,15 +1015,6 @@ static inline void context_set_sm_dte(struct context_entry *context)
 static inline void context_set_sm_pre(struct context_entry *context)
 {
 	context->lo |= BIT_ULL(4);
-}
-
-/*
- * Clear the PRE(Page Request Enable) field of a scalable mode context
- * entry.
- */
-static inline void context_clear_sm_pre(struct context_entry *context)
-{
-	context->lo &= ~BIT_ULL(4);
 }
 
 /* Returns a number of VTD pages, but aligned to MM page size */
