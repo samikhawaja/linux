@@ -272,6 +272,7 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	 */
 	if (device->driver.ops) {
 		vfio_pci_driver_init(device);
+		vfio_pci_driver_memcpy_wait(device);
 		dma_memcpy_one(device);
 	}
 
