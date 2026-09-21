@@ -44,6 +44,23 @@ static void dma_memcpy_one(struct vfio_pci_device *device)
 	VFIO_ASSERT_EQ(memcmp(src, dst, size), 0);
 }
 
+/*
+ * Verify that the copies started by dma_memcpy_start() landed. Must run before
+ * dma_memcpy_one(), which memsets both buffers.
+ */
+static void dma_memcpy_verify(struct vfio_pci_device *device)
+{
+	void *src = memcpy_region.vaddr, *dst;
+	u64 size;
+
+	size = min_t(u64, memcpy_region.size / 2, device->driver.max_memcpy_size);
+	dst = src + size;
+
+	printf("Verifying 0x%lx bytes copied across the Live Update...\n", size);
+	VFIO_ASSERT_EQ(memcmp(src, dst, size), 0);
+	printf("Long-running DMA memcpy PASSED: data matches\n");
+}
+
 static void dma_memcpy_start(struct vfio_pci_device *device)
 {
 	void *src = memcpy_region.vaddr, *dst;
@@ -260,18 +277,34 @@ static void after_kexec(int luo_fd, int state_session_fd)
 	VFIO_ASSERT_TRUE(!ret);
 
 	/*
-	 * Once iommufd preservation is supported and the device is kept fully
-	 * running across the Live Update, this should wait for the long-
-	 * running DMA memcpy operation kicked off in before_kexec() to
-	 * complete. But for now we expect the device to be reset so just
-	 * trigger a single memcpy to make sure it's still functional. Note that
-	 * the DMA is triggered before finishing the session, so this should use
-	 * the restored IOMMU domain. Passing memcpy here should verify that the
-	 * DMA mappings were preserved and the restored iommu domain is still
-	 * active.
+	 * The device was kept running across the Live Update, so pick up the
+	 * long-running DMA memcpy that before_kexec() kicked off and wait for
+	 * it to finish. Reattach rather than init, since init() resets the
+	 * device and would abort the very transfer we are trying to observe.
+	 *
+	 * Note this runs before the session is finished, so it exercises the
+	 * restored IOMMU domain. It passing shows that the DMA mappings were
+	 * preserved and the domain stayed active for the whole kexec.
 	 */
 	if (device->driver.ops) {
-		vfio_pci_driver_init(device);
+		int memcpy_ret;
+
+		printf("Waiting for the long-running DMA memcpy to complete\n");
+		vfio_pci_driver_reattach(device, /*memcpy_in_progress=*/true);
+
+		/*
+		 * Deliberately not asserted. A failure here must still fall
+		 * through to the teardown at the end of this function.
+		 */
+		memcpy_ret = vfio_pci_driver_memcpy_wait(device);
+		if (memcpy_ret) {
+			printf("Long-running DMA memcpy FAILED: wait returned %d\n",
+			       memcpy_ret);
+		} else {
+			printf("Long-running DMA memcpy completed\n");
+			dma_memcpy_verify(device);
+		}
+
 		dma_memcpy_one(device);
 	}
 

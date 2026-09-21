@@ -243,6 +243,42 @@ static void dsa_init(struct vfio_pci_device *device)
 	device->driver.msi = MSIX_VECTOR;
 }
 
+static void dsa_reattach(struct vfio_pci_device *device)
+{
+	struct dsa_state *dsa = to_dsa_state(device);
+
+	VFIO_ASSERT_GE(device->driver.region.size, sizeof(*dsa));
+
+	/*
+	 * dsa->wqcfg_table and dsa->grpcfg_table are pointers into the BAR0
+	 * mapping of the process that created them, so they have to be
+	 * recomputed even though the rest of dsa_state was preserved.
+	 * dsa_register_cache_init() does that and only reads from the device,
+	 * so it is safe to call while DMA is in flight.
+	 *
+	 * Everything dsa_init() does beyond that is deliberately skipped: the
+	 * device and WQ are already enabled, and resetting or reconfiguring
+	 * them would abort the in-flight copies. dsa->memcpy_count, which
+	 * dsa_memcpy_wait() consumes, comes from the preserved region.
+	 */
+	dsa_register_cache_init(device);
+
+	/*
+	 * Interrupts are re-enabled even though dsa_completion_wait() polls.
+	 * before_kexec() had to disable MSI-X for freeze() to succeed, so the
+	 * device comes back with it off, and leaving it that way would make
+	 * driver.msi below a lie and would break dsa_remove(). This only
+	 * touches the MSI-X control word and table, never PCI_COMMAND or the
+	 * work queue, so the in-flight copies are unaffected.
+	 */
+	vfio_pci_msix_enable(device, MSIX_VECTOR, 1);
+
+	device->driver.max_memcpy_count =
+		dsa->max_batches * dsa->max_copies_per_batch;
+	device->driver.max_memcpy_size = 1UL << dsa->gen_cap.max_xfer_shift;
+	device->driver.msi = MSIX_VECTOR;
+}
+
 static void dsa_remove(struct vfio_pci_device *device)
 {
 	dsa_command(device, IDXD_CMD_RESET_DEVICE);
@@ -420,6 +456,7 @@ const struct vfio_pci_driver_ops dsa_ops = {
 	.name = "dsa",
 	.probe = dsa_probe,
 	.init = dsa_init,
+	.reattach = dsa_reattach,
 	.remove = dsa_remove,
 	.memcpy_start = dsa_memcpy_start,
 	.memcpy_wait = dsa_memcpy_wait,
