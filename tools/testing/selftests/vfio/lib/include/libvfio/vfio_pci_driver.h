@@ -24,6 +24,22 @@ struct vfio_pci_driver_ops {
 	void (*init)(struct vfio_pci_device *device);
 
 	/**
+	 * @reattach() - Adopt a @device that is already initialized.
+	 *
+	 * Re-populates the driver software state that is not preserved across a
+	 * Live Update, e.g. because it was derived from a mapping that is only
+	 * valid in the process that created it.
+	 *
+	 * Guarantees:
+	 *  - The device is not reset and is not otherwise reprogrammed.
+	 *  - Any DMA that is already in flight keeps running.
+	 *
+	 * Must be called after device->driver.region has been initialized, and
+	 * instead of init(), never in addition to it.
+	 */
+	void (*reattach)(struct vfio_pci_device *device);
+
+	/**
 	 * remove() - Deinitialize the driver for @device.
 	 */
 	void (*remove)(struct vfio_pci_device *device);
@@ -85,6 +101,8 @@ struct vfio_pci_driver {
 
 void vfio_pci_driver_probe(struct vfio_pci_device *device);
 void vfio_pci_driver_init(struct vfio_pci_device *device);
+void vfio_pci_driver_reattach(struct vfio_pci_device *device,
+			      bool memcpy_in_progress);
 void vfio_pci_driver_remove(struct vfio_pci_device *device);
 int vfio_pci_driver_memcpy(struct vfio_pci_device *device,
 			   iova_t src, iova_t dst, u64 size);

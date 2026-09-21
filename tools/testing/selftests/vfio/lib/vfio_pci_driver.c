@@ -61,6 +61,35 @@ void vfio_pci_driver_init(struct vfio_pci_device *device)
 	driver->initialized = true;
 }
 
+/*
+ * Adopt a device that is already initialized and left running by a previous
+ * process, e.g. across a Live Update. Unlike vfio_pci_driver_init() this does
+ * not reset the device, so any in-flight DMA keeps running.
+ *
+ * @memcpy_in_progress tells the driver whether the previous process left a
+ * memcpy running. If true the caller must follow up with
+ * vfio_pci_driver_memcpy_wait().
+ *
+ * VFIO_CHECK_DRIVER_OP() is deliberately not used here. It asserts that
+ * @initialized matches "op is not init", which reattach() cannot satisfy: it is
+ * the one op besides init() that runs before the driver is initialized.
+ */
+void vfio_pci_driver_reattach(struct vfio_pci_device *device,
+			      bool memcpy_in_progress)
+{
+	struct vfio_pci_driver *driver = &device->driver;
+
+	VFIO_ASSERT_NOT_NULL(driver->ops);
+	VFIO_ASSERT_NOT_NULL(driver->region.vaddr);
+	VFIO_ASSERT_NOT_NULL(driver->ops->reattach, "Driver has no reattach()\n");
+	VFIO_ASSERT_FALSE(driver->initialized);
+
+	driver->ops->reattach(device);
+
+	driver->initialized = true;
+	driver->memcpy_in_progress = memcpy_in_progress;
+}
+
 void vfio_pci_driver_remove(struct vfio_pci_device *device)
 {
 	struct vfio_pci_driver *driver = &device->driver;

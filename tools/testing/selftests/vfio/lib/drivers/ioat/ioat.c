@@ -125,6 +125,27 @@ static void ioat_init(struct vfio_pci_device *device)
 	device->driver.max_memcpy_count = IOAT_DMACOUNT_MAX;
 }
 
+static void ioat_reattach(struct vfio_pci_device *device)
+{
+	struct ioat_state *ioat = to_ioat_state(device);
+
+	VFIO_ASSERT_GE(device->driver.region.size, sizeof(*ioat));
+
+	/*
+	 * Only re-read the capabilities. Everything else the device needs is
+	 * either in the preserved driver region (the descriptor chain) or in
+	 * registers the previous kernel already programmed. In particular do
+	 * not touch CHANCMD, CHAINADDR, CHANCTRL or DMACOUNT, and do not
+	 * rewrite PCI_COMMAND, or the in-flight copies would be aborted.
+	 *
+	 * MSI-X is left disabled. ioat_memcpy_wait() polls CHANSTS.
+	 */
+	device->driver.msi = 0;
+	device->driver.max_memcpy_size =
+		1UL << readb(device->bars[0].vaddr + IOAT_XFERCAP_OFFSET);
+	device->driver.max_memcpy_count = IOAT_DMACOUNT_MAX;
+}
+
 static void ioat_remove(struct vfio_pci_device *device)
 {
 	ioat_reset(device);
@@ -228,6 +249,7 @@ const struct vfio_pci_driver_ops ioat_ops = {
 	.name = "ioat",
 	.probe = ioat_probe,
 	.init = ioat_init,
+	.reattach = ioat_reattach,
 	.remove = ioat_remove,
 	.memcpy_start = ioat_memcpy_start,
 	.memcpy_wait = ioat_memcpy_wait,
