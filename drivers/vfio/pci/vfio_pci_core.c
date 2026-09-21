@@ -591,6 +591,7 @@ static const struct dev_pm_ops vfio_pci_core_pm_ops = {
 int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
+	bool restored;
 	int ret;
 	u16 cmd;
 	u8 msix_pos;
@@ -601,23 +602,49 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 			return ret;
 	}
 
-	/* Don't allow our initial saved state to include busmaster */
-	pci_clear_master(pdev);
+	/*
+	 * A device preserved by the previous kernel across a Live Update is
+	 * still running and is still DMAing through the IOMMU translation that
+	 * was handed over. Clearing bus master or resetting it here would
+	 * destroy exactly the state that preservation exists to keep.
+	 */
+	restored = pci_liveupdate_is_incoming(pdev);
+
+	if (!restored) {
+		/* Don't allow our initial saved state to include busmaster */
+		pci_clear_master(pdev);
+	}
 
 	ret = pci_enable_device(pdev);
 	if (ret)
 		goto out_power;
 
-	/* If reset fails because of the device lock, fail this path entirely */
-	ret = pci_try_reset_function(pdev);
-	if (ret == -EAGAIN)
-		goto out_disable_device;
+	if (!restored) {
+		/*
+		 * If reset fails because of the device lock, fail this path
+		 * entirely
+		 */
+		ret = pci_try_reset_function(pdev);
+		if (ret == -EAGAIN)
+			goto out_disable_device;
 
-	vdev->reset_works = !ret;
-	pci_save_state(pdev);
-	vdev->pci_saved_state = pci_store_saved_state(pdev);
-	if (!vdev->pci_saved_state)
-		pci_dbg(pdev, "%s: Couldn't store saved state\n", __func__);
+		vdev->reset_works = !ret;
+
+		/*
+		 * Snapshot the post-reset state, which is what gets written
+		 * back to the device when userspace closes it.
+		 *
+		 * Skipped for a restored device: there was no reset, so this
+		 * would capture the live guest configuration and
+		 * pci_restore_state() would reinstate it at close. Leaving
+		 * pci_saved_state NULL makes that restore a no-op.
+		 */
+		pci_save_state(pdev);
+		vdev->pci_saved_state = pci_store_saved_state(pdev);
+		if (!vdev->pci_saved_state)
+			pci_dbg(pdev, "%s: Couldn't store saved state\n",
+				__func__);
+	}
 
 	if (likely(!vdev->nointxmask)) {
 		if (vfio_pci_nointx(pdev)) {

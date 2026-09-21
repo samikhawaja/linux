@@ -242,20 +242,20 @@ static int vfio_pci_liveupdate_freeze(struct liveupdate_file_op_args *args)
 	}
 
 	/*
-	 * Reset is a temporary measure to provide kernel after kexec a clean
-	 * device while VFIO live update work is under development and not
-	 * fully supported. It will go away once continuous DMA support is
-	 * added to device preservation.
+	 * Tear down userspace's view of the device: unmap the BARs so the VMM
+	 * cannot touch MMIO across the kexec window, and revoke any P2P
+	 * dma-buf attachments.
+	 *
+	 * The device itself is deliberately left running. It keeps bus
+	 * mastering and continues to DMA through the IOMMU translation
+	 * preserved by the IOMMU liveupdate support.
 	 */
 	vfio_pci_zap_bars(vdev);
 	vfio_pci_dma_buf_move(vdev, true);
-	vfio_pci_core_try_reset(vdev);
-	pci_write_config_word(pdev, PCI_COMMAND, PCI_COMMAND_INTX_DISABLE);
 	/*
 	 * Userspace cannot use the FD correctly now irrespective of liveupdate
-	 * freeze failing or succeeding. They will have to reinitialize the VFIO
-	 * device to continue using it as reset might have loaded default PCI
-	 * state. Disable ioctl, read, write and mmap access to the device.
+	 * freeze failing or succeeding. Disable ioctl, read, write and mmap
+	 * access to the device.
 	 */
 	smp_store_release(&vdev->liveupdate_frozen, true);
 	return 0;
