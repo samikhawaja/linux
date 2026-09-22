@@ -56,7 +56,9 @@ static void dma_memcpy_verify(struct vfio_pci_device *device)
 	size = min_t(u64, memcpy_region.size / 2, device->driver.max_memcpy_size);
 	dst = src + size;
 
+	printf("Verifying 0x%lx bytes copied across the Live Update...\n", size);
 	VFIO_ASSERT_EQ(memcmp(src, dst, size), 0);
+	printf("Long-running DMA memcpy PASSED: data matches\n");
 }
 
 static void dma_memcpy_start(struct vfio_pci_device *device)
@@ -295,10 +297,13 @@ static void after_kexec(int luo_fd, int state_session_fd)
 		 * through to the teardown at the end of this function.
 		 */
 		memcpy_ret = vfio_pci_driver_memcpy_wait(device);
-		if (memcpy_ret)
-			printf("Long-running DMA memcpy FAILED: %d\n", memcpy_ret);
-		else
+		if (memcpy_ret) {
+			printf("Long-running DMA memcpy FAILED: wait returned %d\n",
+			       memcpy_ret);
+		} else {
+			printf("Long-running DMA memcpy completed\n");
 			dma_memcpy_verify(device);
+		}
 
 		dma_memcpy_one(device);
 	}

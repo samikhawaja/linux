@@ -260,11 +260,18 @@ static void dsa_reattach(struct vfio_pci_device *device)
 	 * device and WQ are already enabled, and resetting or reconfiguring
 	 * them would abort the in-flight copies. dsa->memcpy_count, which
 	 * dsa_memcpy_wait() consumes, comes from the preserved region.
-	 *
-	 * MSI-X is left disabled. dsa_completion_wait() polls the completion
-	 * record.
 	 */
 	dsa_register_cache_init(device);
+
+	/*
+	 * Interrupts are re-enabled even though dsa_completion_wait() polls.
+	 * before_kexec() had to disable MSI-X for freeze() to succeed, so the
+	 * device comes back with it off, and leaving it that way would make
+	 * driver.msi below a lie and would break dsa_remove(). This only
+	 * touches the MSI-X control word and table, never PCI_COMMAND or the
+	 * work queue, so the in-flight copies are unaffected.
+	 */
+	vfio_pci_msix_enable(device, MSIX_VECTOR, 1);
 
 	device->driver.max_memcpy_count =
 		dsa->max_batches * dsa->max_copies_per_batch;
