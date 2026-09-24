@@ -1,0 +1,79 @@
+From 84b12660887fb014c9dd22667d8f67a2b498c3e6 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Fri, 25 Sep 2026 00:12:00 +0000
+Subject: [RFC PATCH 0/3] iommu/arm-smmu-v3: Add support for hitless replace of CD entries
+
+This patch series adds support for replacing IOMMU domains with S1 page
+tables hitlessly, that is without disrupting the ongoing DMAs. This is
+one of the dependencies of the Liveupdate IOMMU support for Arm SMMUv3.
+
+S1 domains are programmed by CD entries in the CD table. During a new
+domain attach these are updated using arm_smmu_write_cd_entry(). Since
+ASID and TTB0 are in different 64-bit words, arm_smmu_write_cd_entry()
+considers it a non-hitless update and sets V=0. This means such an
+update is disruptive and would generate translation faults if there are
+ongoing DMAs.
+
+Replace the CD entries by using an unused temporary ASID in the
+following sequence to allow hitless replacement of CD entry,
+
+- Update the CD entry with temporary ASID.
+- Update the CD entry with the target TTB0.
+- Invalidate the temporary ASID.
+- Update the CD entry with target ASID.
+- Invalidate and release the temporary ASID.
+
+Note that the temporary ASID is needed because neither domain's ASID can
+be used in between. Tagging one domain's page tables with the other
+domain's ASID would populate the TLB under an ASID that other devices are
+translating with.
+
+The series adds a vfio selftest that triggers a continuous DMA and does
+the hwpt replace while the DMA is ongoing. Since domain replacement is a
+race with the translation requests, the test does it multiple times to
+capture the small window where IOMMU faults can occur. Without this
+change we can observe the SMMU faults in the kernel logs and with it the
+SMMU faults do not occur.
+
+This is only tested on qemu with the emulated SMMUv3 and an out of tree
+NVMe vfio selftest driver, not on real hardware. Following are not
+covered and can be done later,
+
+- S2 domains have the same problem, S2VMID is in STE qword 2 and S2TTB is
+  in qword 3. These need the same handling with a temporary VMID.
+- ATS is not tested, the test environment runs with pci=noats.
+
+Looking forward to your feedback on this.
+
+Dependencies:
+The patch series includes some part of the vfio multi iommu series as it
+is required for the hwpt_replace vfio selftest. It is part of this
+series since the original code doesn't apply cleanly on the base.
+https://lore.kernel.org/all/20260505221518.619123-1-skhawaja@google.com/
+
+Related Work:
+Liveupdate IOMMU patch series:
+https://lore.kernel.org/all/20260921004834.2601285-1-skhawaja@google.com/
+Liveupdate IOMMU feature patchset breakdown:
+https://docs.google.com/document/d/1enDn-uPE9U77U-xHEnzn6HHGKiePSAtMIP8EDU3NO0M
+
+Samiullah Khawaja (3):
+  vfio: selftests: Add support of creating iommus from iommufd
+  vfio: selftests: Add iommufd hwpt replace test
+  iommu/arm-smmu-v3: Add support of hitless replace of S1 domains
+
+ drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3.c   |  66 ++++++-
+ tools/testing/selftests/vfio/Makefile         |   1 +
+ .../vfio/lib/include/libvfio/iommu.h          |   2 +
+ .../lib/include/libvfio/vfio_pci_device.h     |   2 +
+ tools/testing/selftests/vfio/lib/iommu.c      |  60 +++++-
+ .../selftests/vfio/lib/vfio_pci_device.c      |  25 ++-
+ .../vfio/vfio_iommufd_hwpt_replace_test.c     | 171 ++++++++++++++++++
+ 7 files changed, 316 insertions(+), 11 deletions(-)
+ create mode 100644 tools/testing/selftests/vfio/vfio_iommufd_hwpt_replace_test.c
+
+
+base-commit: 3d7783543c2646af69ad65825e810060494bea21
+-- 
+2.56.0.rc1.315.gc6ed9934b7-goog
+
