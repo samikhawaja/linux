@@ -1,0 +1,68 @@
+From 578980915cc5dc0a8509d68b1af8ca6d0fed60ac Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Tue, 29 Sep 2026 04:21:40 +0000
+Subject: [RFC PATCH 0/6] Introduce file handler dependency level
+
+LUO allows preservation of FDs into sessions. An FD can depend on other
+FDs, which must be preserved before it. These dependencies are enforced
+by the file handlers, and userspace is responsible for preserving the
+FDs in the correct order.
+
+This RFC proposes a mechanism that allows userspace to preserve the FDs
+as a batch, and the kernel preserves them in the required order. A new
+ioctl is added that allows userspace to provide an array of FDs and
+tokens for preservation. This gives the kernel the token and the intent
+to preserve every FD in the batch up front.
+
+This RFC lets file handlers specify levels. The levels are static
+configurations of how the file handlers relate to each other. Each level
+represents a class of file handler, which fixes the order between them.
+The levels are spaced out to allow addition of new levels.
+
+The batch is atomic: either all FDs are preserved or none are, and on
+failure the index of the failing FD is returned to userspace. The
+existing LIVEUPDATE_SESSION_PRESERVE_FD ioctl is unchanged and behaves
+as a batch of one.
+
+The patch series builds on top of the IOMMU live update persistence
+series to demonstrate the FD dependency:
+https://lore.kernel.org/all/20260921004834.2601285-1-skhawaja@google.com/
+
+All of the changes with dependency are pushed here:
+https://github.com/samikhawaja/linux/tree/luo/fd-dependency-rfc
+
+Future work:
+
+ - Allow file handlers to be preserved at multiple levels to allow
+   resolving circular dependencies.
+ - Retrieve side: dependencies are still resolved from within the file
+   handler's .retrieve().
+
+Looking forward to your feedback on this.
+
+Samiullah Khawaja (6):
+  liveupdate: Introduce file handler dependency level
+  mm/memfd_luo: Set Liveupdate level of a memfd file handler
+  iommufd: Set liveupdate file handler level
+  vfio/pci: Set live update file handler level
+  selftests/liveupdate: Add API to preserve a batch of FDs
+  iommufd/selftests: Preserve all the FDs in a batch
+
+ drivers/iommu/iommufd/liveupdate.c            |   1 +
+ drivers/vfio/pci/vfio_pci_liveupdate.c        |   1 +
+ include/linux/liveupdate.h                    |  24 ++
+ include/uapi/linux/liveupdate.h               |  39 +++
+ kernel/liveupdate/luo_file.c                  | 316 ++++++++++++------
+ kernel/liveupdate/luo_internal.h              |   2 +
+ kernel/liveupdate/luo_session.c               |  45 +++
+ mm/memfd_luo.c                                |   1 +
+ .../iommu/iommufd_liveupdate_kexec_test.c     |  27 +-
+ .../liveupdate/lib/include/libliveupdate.h    |   2 +
+ .../selftests/liveupdate/lib/lu_utils.c       |  20 ++
+ 11 files changed, 379 insertions(+), 99 deletions(-)
+
+
+base-commit: 945d61765894dda2f0344de50cb1ade2e51b66fd
+-- 
+2.56.0.rc1.315.gc6ed9934b7-goog
+
