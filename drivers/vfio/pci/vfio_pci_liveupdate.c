@@ -335,6 +335,7 @@ static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {
 static struct liveupdate_file_handler vfio_pci_liveupdate_fh = {
 	.ops = &vfio_pci_liveupdate_file_ops,
 	.compatible = VFIO_PCI_LUO_FH_COMPATIBLE,
+	.level = LIVEUPDATE_LEVEL_DEVICE,
 };
 
 int __init vfio_pci_liveupdate_init(void)
