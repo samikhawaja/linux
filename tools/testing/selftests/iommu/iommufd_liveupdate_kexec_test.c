@@ -153,6 +153,9 @@ static void setup_iommufd(int iommufd, int memfd, int cdev_fd)
 static void before_kexec(int luo_fd)
 {
 	int iommufd, cdev_fd, memfd, session;
+	__u64 tokens[3];
+	__u32 failed;
+	int fds[3];
 
 	create_state_file(luo_fd, state_session, STATE_TOKEN, /*next_stage=*/2);
 
@@ -174,9 +177,27 @@ static void before_kexec(int luo_fd)
 	if (!luo_session_preserve_fd(session, iommufd, IOMMUFD_TOKEN))
 		fail_exit("Preserving iommufd without memfd should fail");
 
-	test_luo_session_preserve_fd(session, memfd, MEMFD_TOKEN);
-	test_luo_session_preserve_fd(session, iommufd, IOMMUFD_TOKEN);
-	test_luo_session_preserve_fd(session, cdev_fd, CDEV_TOKEN);
+	/*
+	 * Batch without iommufd: memfd is preserved first, then cdev fails.
+	 * The whole batch must be rolled back, including the memfd.
+	 */
+	fds[0] = cdev_fd;
+	tokens[0] = CDEV_TOKEN;
+	fds[1] = memfd;
+	tokens[1] = MEMFD_TOKEN;
+	if (luo_session_preserve_fds(session, fds, tokens, 2, &failed) != -ENOENT)
+		fail_exit("Batch preserve without iommufd should fail with ENOENT");
+	ksft_assert(failed == 0);
+
+	/* Full batch, passed in reverse dependency order. */
+	fds[0] = cdev_fd;
+	tokens[0] = CDEV_TOKEN;
+	fds[1] = iommufd;
+	tokens[1] = IOMMUFD_TOKEN;
+	fds[2] = memfd;
+	tokens[2] = MEMFD_TOKEN;
+	if (luo_session_preserve_fds(session, fds, tokens, 3, &failed))
+		fail_exit("Batch preserve failed at index %u", failed);
 
 	close(session);
 	session = luo_create_session(luo_fd, iommufd_session);
