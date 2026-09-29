@@ -604,6 +604,7 @@ static const struct liveupdate_file_ops memfd_luo_file_ops = {
 static struct liveupdate_file_handler memfd_luo_handler = {
 	.ops = &memfd_luo_file_ops,
 	.compatible = MEMFD_LUO_FH_COMPATIBLE,
+	.level = LIVEUPDATE_LEVEL_MEM,
 };
 
 static int __init memfd_luo_init(void)
