@@ -43,10 +43,13 @@
  *
  * File Preservation Lifecycle happy path:
  *
- * 1. Preserve (Normal Operation): A userspace agent preserves files one by one
- *    via an ioctl. For each file, luo_preserve_file() finds a compatible
- *    handler, calls its .preserve() operation, and creates an internal &struct
- *    luo_file to track the live state.
+ * 1. Preserve (Normal Operation): A userspace agent preserves files via an
+ *    ioctl, either one by one or in batches. For each batch,
+ *    luo_preserve_files() finds a compatible handler for every file, then
+ *    calls the handlers' .preserve() operations in ascending handler level
+ *    order (see &enum liveupdate_level) so that dependencies are preserved
+ *    before their users, and creates an internal &struct luo_file to track
+ *    the live state of each file.
  *
  * 2. Freeze (Pre-Reboot): Just before the kexec, luo_file_freeze() is called.
  *    It iterates through all preserved files, calls their respective .freeze()
@@ -105,6 +108,7 @@
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/luo.h>
 #include <linux/list_private.h>
+#include <linux/list_sort.h>
 #include <linux/liveupdate.h>
 #include <linux/module.h>
 #include <linux/sizes.h>
@@ -175,7 +179,8 @@ static unsigned long luo_get_id(struct liveupdate_file_handler *fh,
 	return fh->ops->get_id ? fh->ops->get_id(file) : (unsigned long)file;
 }
 
-static bool luo_token_is_used(struct luo_file_set *file_set, u64 token)
+static bool luo_token_is_used(struct luo_file_set *file_set,
+			      struct list_head *pending, u64 token)
 {
 	struct luo_file *iter;
 
@@ -184,69 +189,36 @@ static bool luo_token_is_used(struct luo_file_set *file_set, u64 token)
 			return true;
 	}
 
+	list_for_each_entry(iter, pending, list) {
+		if (iter->token == token)
+			return true;
+	}
+
 	return false;
 }
 
-/**
- * luo_preserve_file - Initiate the preservation of a file descriptor.
- * @file_set: The file_set to which the preserved file will be added.
- * @token:    A unique, user-provided identifier for the file.
- * @fd:       The file descriptor to be preserved.
+/*
+ * luo_file_alloc - Allocate a luo_file for one file of a batch.
  *
- * This function orchestrates the first phase of preserving a file. Upon entry,
- * it takes a reference to the 'struct file' via fget(), effectively making LUO
- * a co-owner of the file. This reference is held until the file is either
- * unpreserved or successfully finished in the next kernel, preventing the file
- * from being prematurely destroyed.
+ * Checks the token, takes a reference on the file, finds the handler and claims
+ * the file globally.
  *
- * This function orchestrates the first phase of preserving a file. It performs
- * the following steps:
- *
- * 1. Validates that the @token is not already in use within the file_set.
- * 2. Ensures the file_set's memory for files serialization is allocated
- *    (allocates if needed).
- * 3. Iterates through registered handlers, calling can_preserve() to find one
- *    compatible with the given @fd.
- * 4. Calls the handler's .preserve() operation, which saves the file's state
- *    and returns an opaque private data handle.
- * 5. Adds the new instance to the file_set's internal list.
- *
- * On success, LUO takes a reference to the 'struct file' and considers it
- * under its management until it is unpreserved or finished.
- *
- * In case of any failure, all intermediate allocations (file reference, memory
- * for the 'luo_file' struct, etc.) are cleaned up before returning an error.
- *
- * Context: Can be called from an ioctl handler during normal system operation.
- * Return: 0 on success. Returns a negative errno on failure:
- *         -EEXIST if the token is already used.
- *         -EBUSY if the file descriptor is already preserved by another session.
- *         -EBADF if the file descriptor is invalid.
- *         -ENOSPC if the file_set is full.
- *         -ENOENT if no compatible handler is found.
- *         -ENOMEM on memory allocation failure.
- *         Other erros might be returned by .preserve().
+ * On success the new luo_file is added to @pending.
  */
-int luo_preserve_file(struct luo_file_set *file_set, u64 token, int fd)
+static int luo_file_alloc(struct luo_file_set *file_set,
+			  struct list_head *pending, u64 token, int fd)
 {
-	struct liveupdate_file_op_args args = {0};
 	struct liveupdate_file_handler *fh;
 	struct luo_file *luo_file;
 	struct file *file;
 	int err;
 
-	if (luo_token_is_used(file_set, token))
+	if (luo_token_is_used(file_set, pending, token))
 		return -EEXIST;
 
-	err = kho_block_set_grow(&file_set->block_set, file_set->count + 1);
-	if (err)
-		return err;
-
 	file = fget(fd);
-	if (!file) {
-		err = -EBADF;
-		goto err_shrink;
-	}
+	if (!file)
+		return -EBADF;
 
 	err = -ENOENT;
 	down_read(&luo_register_rwlock);
@@ -282,23 +254,10 @@ int luo_preserve_file(struct luo_file_set *file_set, u64 token, int fd)
 	luo_file->fh = fh;
 	luo_file->token = token;
 	mutex_init(&luo_file->mutex);
-
-	args.handler = fh;
-	args.session = luo_session_from_file_set(file_set);
-	args.file = file;
-	err = fh->ops->preserve(&args);
-	if (err)
-		goto err_kfree;
-
-	luo_file->serialized_data = args.serialized_data;
-	luo_file->private_data = args.private_data;
-	list_add_tail(&luo_file->list, &file_set->files_list);
-	file_set->count++;
+	list_add_tail(&luo_file->list, pending);
 
 	return 0;
 
-err_kfree:
-	kfree(luo_file);
 err_flb_unpreserve:
 	luo_flb_file_unpreserve(fh);
 err_erase_xa:
@@ -307,10 +266,197 @@ err_module_put:
 	module_put(fh->ops->owner);
 err_fput:
 	fput(file);
-err_shrink:
+
+	return err;
+}
+
+static void luo_file_free(struct luo_file *luo_file)
+{
+	struct liveupdate_file_handler *fh = luo_file->fh;
+
+	list_del(&luo_file->list);
+	luo_flb_file_unpreserve(fh);
+	xa_erase(&luo_preserved_files, luo_get_id(fh, luo_file->file));
+	module_put(fh->ops->owner);
+	fput(luo_file->file);
+	mutex_destroy(&luo_file->mutex);
+	kfree(luo_file);
+}
+
+/*
+ * luo_file_preserve_internal - Preserve one file of a batch.
+ *
+ * Calls the handler's .preserve() and, on success, moves the file from the
+ * batch's pending list to the tail of @file_set->files_list, after which it
+ * is visible to liveupdate_get_token_outgoing().
+ */
+static int luo_file_preserve_internal(struct luo_file_set *file_set,
+				      struct luo_file *luo_file)
+{
+	struct liveupdate_file_op_args args = {0};
+	int err;
+
+	args.handler = luo_file->fh;
+	args.session = luo_session_from_file_set(file_set);
+	args.file = luo_file->file;
+	err = luo_file->fh->ops->preserve(&args);
+	if (err)
+		return err;
+
+	luo_file->serialized_data = args.serialized_data;
+	luo_file->private_data = args.private_data;
+	list_move_tail(&luo_file->list, &file_set->files_list);
+	file_set->count++;
+
+	return 0;
+}
+
+static void luo_file_unpreserve_one(struct luo_file_set *file_set,
+				    struct luo_file *luo_file)
+{
+	struct liveupdate_file_op_args args = {0};
+
+	args.handler = luo_file->fh;
+	args.session = luo_session_from_file_set(file_set);
+	args.file = luo_file->file;
+	args.serialized_data = luo_file->serialized_data;
+	args.private_data = luo_file->private_data;
+	luo_file->fh->ops->unpreserve(&args);
+	luo_flb_file_unpreserve(luo_file->fh);
+
+	xa_erase(&luo_preserved_files,
+		 luo_get_id(luo_file->fh, luo_file->file));
+	module_put(luo_file->fh->ops->owner);
+
+	list_del(&luo_file->list);
+	file_set->count--;
+	kho_block_set_shrink(&file_set->block_set, file_set->count);
+
+	fput(luo_file->file);
+	mutex_destroy(&luo_file->mutex);
+	kfree(luo_file);
+}
+
+static int luo_file_level_cmp(void *priv, const struct list_head *a,
+			      const struct list_head *b)
+{
+	const struct luo_file *fa = list_entry(a, struct luo_file, list);
+	const struct luo_file *fb = list_entry(b, struct luo_file, list);
+
+	return fa->fh->level > fb->fh->level;
+}
+
+/**
+ * luo_preserve_files - Preserve a batch of file descriptors.
+ * @file_set:   The file_set to which the preserved files will be added.
+ * @tokens:     Array of @nr unique, user-provided identifiers.
+ * @fds:        Array of @nr file descriptors to be preserved.
+ * @nr:         Number of entries in @tokens and @fds.
+ * @failed_idx: Output; on failure, the index into @tokens/@fds of the entry
+ *              that failed, or @nr if the failure is not specific to an entry.
+ *
+ * The file handler's .preserve() is called in the level ascending order, so a
+ * dependency in the same batch is preserved before the file that needs it,
+ * regardless of the order userspace passed the fds in.
+ *
+ * The operation is atomic: on any failure, the files of this batch that were
+ * already preserved are unpreserved in reverse order, and the file_set is left
+ * as it was before the call.
+ *
+ * On success, LUO takes a reference to each 'struct file' and considers it
+ * under its management until it is unpreserved or finished.
+ *
+ * Context: Called from an ioctl handler with the session mutex held.
+ * Return: 0 on success. Returns a negative errno on failure:
+ *         -EEXIST if a token is already used.
+ *         -EBUSY if a file descriptor is already preserved (in this batch or
+ *                by another session).
+ *         -EBADF if a file descriptor is invalid.
+ *         -ENOSPC if the file_set is full.
+ *         -ENOENT if no compatible handler is found, or a dependency of a
+ *                 file is not preserved.
+ *         -ENOMEM on memory allocation failure.
+ *         Other errors might be returned by .preserve().
+ */
+int luo_preserve_files(struct luo_file_set *file_set, const u64 *tokens,
+		       const int *fds, u32 nr, u32 *failed_idx)
+{
+	struct luo_file *luo_file, *tmp;
+	struct list_head *mark;
+	LIST_HEAD(pending);
+	u32 i;
+	int err;
+
+	*failed_idx = nr;
+
+	err = kho_block_set_grow(&file_set->block_set, file_set->count + nr);
+	if (err)
+		return err;
+
+	for (i = 0; i < nr; i++) {
+		err = luo_file_alloc(file_set, &pending, tokens[i], fds[i]);
+		if (err) {
+			*failed_idx = i;
+			goto err_abort;
+		}
+	}
+
+	list_sort(NULL, &pending, luo_file_level_cmp);
+
+	/* Everything after @mark on files_list belongs to this batch */
+	mark = file_set->files_list.prev;
+	while (!list_empty(&pending)) {
+		luo_file = list_first_entry(&pending, struct luo_file, list);
+		err = luo_file_preserve_internal(file_set, luo_file);
+		if (err) {
+			for (i = 0; i < nr; i++) {
+				if (tokens[i] == luo_file->token) {
+					*failed_idx = i;
+					break;
+				}
+			}
+			goto err_unpreserve;
+		}
+	}
+
+	return 0;
+
+err_unpreserve:
+	/*
+	 * files_list is in dependency order, so nothing before @mark can
+	 * depend on anything after it. Unpreserving the tail in reverse order
+	 * is the same as session teardown, stopped at @mark.
+	 */
+	while (file_set->files_list.prev != mark) {
+		luo_file = list_last_entry(&file_set->files_list,
+					   struct luo_file, list);
+		luo_file_unpreserve_one(file_set, luo_file);
+	}
+err_abort:
+	list_for_each_entry_safe(luo_file, tmp, &pending, list)
+		luo_file_free(luo_file);
 	kho_block_set_shrink(&file_set->block_set, file_set->count);
 
 	return err;
+}
+
+/**
+ * luo_preserve_file - Preserve a single file descriptor.
+ * @file_set: The file_set to which the preserved file will be added.
+ * @token:    A unique, user-provided identifier for the file.
+ * @fd:       The file descriptor to be preserved.
+ *
+ * Equivalent to luo_preserve_files() with a batch of one. Any dependency of
+ * @fd must have been preserved by an earlier call.
+ *
+ * Context: Called from an ioctl handler with the session mutex held.
+ * Return: See luo_preserve_files().
+ */
+int luo_preserve_file(struct luo_file_set *file_set, u64 token, int fd)
+{
+	u32 failed_idx;
+
+	return luo_preserve_files(file_set, &token, &fd, 1, &failed_idx);
 }
 
 /**
@@ -320,12 +466,13 @@ err_shrink:
  * This function serves as the primary cleanup path for a file_set. It is
  * invoked when the userspace agent closes the file_set's file descriptor.
  *
- * For each file, it performs the following cleanup actions:
+ * Files are unpreserved in reverse order of preservation, i.e. in reverse
+ * dependency order. For each file, it performs the following cleanup actions:
  *   1. Calls the handler's .unpreserve() callback to allow the handler to
  *      release any resources it allocated.
  *   2. Removes the file from the file_set's internal tracking list.
  *   3. Releases the reference to the 'struct file' that was taken by
- *      luo_preserve_file() via fput(), returning ownership.
+ *      luo_preserve_files() via fput(), returning ownership.
  *   4. Frees the memory associated with the internal 'struct luo_file'.
  *
  * After all individual files are unpreserved, it frees the contiguous memory
@@ -336,30 +483,9 @@ void luo_file_unpreserve_files(struct luo_file_set *file_set)
 	struct luo_file *luo_file;
 
 	while (!list_empty(&file_set->files_list)) {
-		struct liveupdate_file_op_args args = {0};
-
 		luo_file = list_last_entry(&file_set->files_list,
 					   struct luo_file, list);
-
-		args.handler = luo_file->fh;
-		args.session = luo_session_from_file_set(file_set);
-		args.file = luo_file->file;
-		args.serialized_data = luo_file->serialized_data;
-		args.private_data = luo_file->private_data;
-		luo_file->fh->ops->unpreserve(&args);
-		luo_flb_file_unpreserve(luo_file->fh);
-
-		xa_erase(&luo_preserved_files,
-			 luo_get_id(luo_file->fh, luo_file->file));
-		module_put(luo_file->fh->ops->owner);
-
-		list_del(&luo_file->list);
-		file_set->count--;
-		kho_block_set_shrink(&file_set->block_set, file_set->count);
-
-		fput(luo_file->file);
-		mutex_destroy(&luo_file->mutex);
-		kfree(luo_file);
+		luo_file_unpreserve_one(file_set, luo_file);
 	}
 
 	kho_block_set_destroy(&file_set->block_set);
@@ -956,18 +1082,16 @@ int liveupdate_get_token_outgoing(struct liveupdate_session *s,
 {
 	struct luo_file_set *file_set = luo_file_set_from_session_locked(s);
 	struct luo_file *luo_file;
-	int err = -ENOENT;
 
 	list_for_each_entry(luo_file, &file_set->files_list, list) {
 		if (luo_file->file == file) {
 			if (tokenp)
 				*tokenp = luo_file->token;
-			err = 0;
-			break;
+			return 0;
 		}
 	}
 
-	return err;
+	return -ENOENT;
 }
 EXPORT_SYMBOL_GPL(liveupdate_get_token_outgoing);
 

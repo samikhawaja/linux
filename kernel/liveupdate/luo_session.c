@@ -278,6 +278,47 @@ static int luo_session_preserve_fd(struct luo_session *session,
 	return err;
 }
 
+static int luo_session_preserve_fds(struct luo_session *session,
+				    struct luo_ucmd *ucmd)
+{
+	struct liveupdate_session_preserve_fds *argp = ucmd->cmd;
+	u64 *tokens __free(kfree) = NULL;
+	int *fds __free(kfree) = NULL;
+	int err;
+
+	if (argp->__reserved)
+		return -EINVAL;
+
+	if (!argp->nr)
+		return -EINVAL;
+
+	fds = memdup_array_user(u64_to_user_ptr(argp->fds), argp->nr,
+				sizeof(*fds));
+	if (IS_ERR(fds))
+		return PTR_ERR(fds);
+
+	tokens = memdup_array_user(u64_to_user_ptr(argp->tokens), argp->nr,
+				   sizeof(*tokens));
+	if (IS_ERR(tokens))
+		return PTR_ERR(tokens);
+
+	mutex_lock(&session->mutex);
+	err = luo_preserve_files(&session->file_set, tokens, fds, argp->nr,
+				 &argp->out_failed_index);
+	mutex_unlock(&session->mutex);
+	if (err) {
+		/* Best effort, the preserve error takes precedence */
+		luo_ucmd_respond(ucmd, sizeof(*argp));
+		return err;
+	}
+
+	err = luo_ucmd_respond(ucmd, sizeof(*argp));
+	if (err)
+		pr_warn("The files were successfully preserved, but response to user failed\n");
+
+	return err;
+}
+
 static int luo_session_retrieve_fd(struct luo_session *session,
 				   struct luo_ucmd *ucmd)
 {
@@ -345,6 +386,7 @@ union ucmd_buffer {
 	struct liveupdate_session_preserve_fd preserve;
 	struct liveupdate_session_retrieve_fd retrieve;
 	struct liveupdate_session_get_name get_name;
+	struct liveupdate_session_preserve_fds preserve_fds;
 };
 
 /* Type of sessions the ioctl applies to. */
@@ -382,6 +424,9 @@ static const struct luo_ioctl_op luo_session_ioctl_ops[] = {
 		 struct liveupdate_session_retrieve_fd, token, LUO_IOCTL_INCOMING),
 	IOCTL_OP(LIVEUPDATE_SESSION_GET_NAME, luo_session_get_name,
 		 struct liveupdate_session_get_name, name, LUO_IOCTL_ALL),
+	IOCTL_OP(LIVEUPDATE_SESSION_PRESERVE_FDS, luo_session_preserve_fds,
+		 struct liveupdate_session_preserve_fds, __reserved,
+		 LUO_IOCTL_OUTGOING),
 };
 
 static bool luo_ioctl_type_valid(struct luo_session *session,

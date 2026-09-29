@@ -60,6 +60,7 @@ enum {
 	LIVEUPDATE_CMD_SESSION_RETRIEVE_FD = 0x41,
 	LIVEUPDATE_CMD_SESSION_FINISH = 0x42,
 	LIVEUPDATE_CMD_SESSION_GET_NAME = 0x43,
+	LIVEUPDATE_CMD_SESSION_PRESERVE_FDS = 0x44,
 };
 
 /**
@@ -235,5 +236,43 @@ struct liveupdate_session_get_name {
 
 #define LIVEUPDATE_SESSION_GET_NAME					\
 	_IO(LIVEUPDATE_IOCTL_TYPE, LIVEUPDATE_CMD_SESSION_GET_NAME)
+
+/**
+ * struct liveupdate_session_preserve_fds - ioctl(LIVEUPDATE_SESSION_PRESERVE_FDS)
+ * @size:             Input; sizeof(struct liveupdate_session_preserve_fds)
+ * @nr:               Input; Number of entries in @fds and @tokens. Must not be
+ *                    zero.
+ * @fds:              Input; User pointer to an array of @nr __s32 file
+ *                    descriptors to be preserved.
+ * @tokens:           Input; User pointer to an array of @nr __u64 opaque,
+ *                    unique tokens, one for each entry in @fds.
+ * @out_failed_index: Output; On failure, the index of the entry in @fds that
+ *                    caused the failure, or @nr if the failure is not
+ *                    specific to an entry.
+ * @__reserved:       Input; Must be zero.
+ *
+ * Preserve a batch of file descriptors, some of which may depend on others in
+ * the same batch. The entries may be given in any order; the kernel preserves
+ * them in dependency order.
+ *
+ * All dependencies of a file must either be part of the same batch or have
+ * been preserved earlier in this session.
+ *
+ * The operation is atomic: either all file descriptors in the batch are
+ * preserved, or none are and the session is unchanged.
+ *
+ * Return: 0 on success, negative error code on failure.
+ */
+struct liveupdate_session_preserve_fds {
+	__u32		size;
+	__u32		nr;
+	__aligned_u64	fds;
+	__aligned_u64	tokens;
+	__u32		out_failed_index;
+	__u32		__reserved;
+};
+
+#define LIVEUPDATE_SESSION_PRESERVE_FDS					\
+	_IO(LIVEUPDATE_IOCTL_TYPE, LIVEUPDATE_CMD_SESSION_PRESERVE_FDS)
 
 #endif /* _UAPI_LIVEUPDATE_H */

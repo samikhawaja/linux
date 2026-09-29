@@ -88,12 +88,35 @@ struct liveupdate_file_ops {
 };
 
 /**
+ * enum liveupdate_level - Preservation order of a file handler.
+ * @LIVEUPDATE_LEVEL_NONE:   Level not set. The handler does not depend on
+ *                           any other preserved file. Preserved first.
+ * @LIVEUPDATE_LEVEL_MEM:    Files that provide memory.
+ * @LIVEUPDATE_LEVEL_MAPPER: Files that map memory provided by a lower level.
+ * @LIVEUPDATE_LEVEL_DEVICE: Files that represent devices.
+ *
+ * When a batch of files is preserved with LIVEUPDATE_SESSION_PRESERVE_FDS,
+ * LUO calls the handlers' .preserve() in ascending level order.
+ *
+ * The values are spaced so that new levels can be inserted without
+ * renumbering. The level is kernel internal and not part of any ABI.
+ */
+enum liveupdate_level {
+	LIVEUPDATE_LEVEL_NONE	= 0x0,
+	LIVEUPDATE_LEVEL_MEM	= 0x10,
+	LIVEUPDATE_LEVEL_MAPPER	= 0x20,
+	LIVEUPDATE_LEVEL_DEVICE	= 0x30,
+};
+
+/**
  * struct liveupdate_file_handler - Represents a handler for a live-updatable file type.
  * @ops:                Callback functions
  * @compatible:         The compatibility string (e.g., "memfd-v1", "vfiofd-v1")
  *                      that uniquely identifies the file type this handler
  *                      supports. This is matched against the compatible string
  *                      associated with individual &struct file instances.
+ * @level:              Optional. Preservation order of this handler. See &enum
+ *                      liveupdate_level.
  *
  * Modules that want to support live update for specific file types should
  * register an instance of this structure. LUO uses this registration to
@@ -103,6 +126,7 @@ struct liveupdate_file_ops {
 struct liveupdate_file_handler {
 	const struct liveupdate_file_ops *ops;
 	const char compatible[LIVEUPDATE_HNDL_COMPAT_LENGTH];
+	enum liveupdate_level level;
 
 	/* private: */
 
