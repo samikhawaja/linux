@@ -1,0 +1,76 @@
+From 68e02e5f41f4c16a763aac063c2c864d6593d126 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Tue, 29 Sep 2026 03:50:03 +0000
+Subject: [RFC PATCH 0/5] Introduce file handler dependency level
+
+LUO allows preservation of FDs into sessions. FDs can have dependency
+that need order of dependency. These dependencies are enforced by the
+file handlers and the userspace is responsible to preserve the FDs in
+the correct order.
+
+This RFC proposes a mechanism that allows the userspace to preserve the
+FDs as a batch and the kernel resolves the dependency and preserves the
+FDs in the required order. Basically a new ioctl is added that allows
+the userspace to provide an array of FDs and tokens for preservation.
+This provides the kernel the token and the intent of preservation of a
+FD from userspace.
+
+Before going into the details of the solution that is proposed in this
+RFC, I want to list various alternate mechanisms that one might consider
+for this:
+
+Recursive preservation:
+
+	 The file handlers invoked the preservation of their dependency by
+		calling an internal API. The LUO allows the preservation of such a
+		dependency if it was part of the batch being preserved. This mechanism
+		looks attractive, but due to recursion it can have really bad lockdep
+		issues and would make the file handler code complicated.
+
+Retry and discover:
+
+  The file handlers check if their dependency is preserved, if not they
+		return error as they would normally. LUO checks the error and tries
+		preserving other FDs in the batch. It continous doing until all FDs
+		are preserved or it cannot preserve any more FDs. This is very simple
+		but can be O(n^2) in worst case.
+
+Solution:
+
+  The solution is to allow file handlers to specify levels. The levels
+		are static configurations in which the file handlers relate to each
+		other. Each level represents a class of file handler, which makes it
+		easier to guess the order between them. The levels are spaced out to
+		allow addition of new levels.
+
+Future work:
+
+ - Allow file handlers to preserved at multiple levels to allow
+			resolving circular dependency.
+
+Looking forwas to your feedback on this.
+
+Samiullah Khawaja (5):
+  liveupdate: Introduce file handler dependency level
+  mm/memfd_luo: Set Liveupdate level of a memfd file handler
+  iommufd: Set liveupdate file handler level
+  vfio/pci: Set live update file handler level
+  selftests/liveupdate: Add API to preserve a batch of FDs
+
+ drivers/iommu/iommufd/liveupdate.c            |   1 +
+ drivers/vfio/pci/vfio_pci_liveupdate.c        |   1 +
+ include/linux/liveupdate.h                    |  24 ++
+ include/uapi/linux/liveupdate.h               |  39 +++
+ kernel/liveupdate/luo_file.c                  | 316 ++++++++++++------
+ kernel/liveupdate/luo_internal.h              |   2 +
+ kernel/liveupdate/luo_session.c               |  45 +++
+ mm/memfd_luo.c                                |   1 +
+ .../liveupdate/lib/include/libliveupdate.h    |   2 +
+ .../selftests/liveupdate/lib/lu_utils.c       |  20 ++
+ 10 files changed, 355 insertions(+), 96 deletions(-)
+
+
+base-commit: 945d61765894dda2f0344de50cb1ade2e51b66fd
+-- 
+2.56.0.rc1.315.gc6ed9934b7-goog
+
