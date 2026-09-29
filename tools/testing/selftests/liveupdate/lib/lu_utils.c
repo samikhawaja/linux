@@ -93,6 +93,26 @@ int luo_session_preserve_fd(int session_fd, int fd, __u64 token)
 	return 0;
 }
 
+int luo_session_preserve_fds(int session_fd, const int *fds,
+			     const __u64 *tokens, __u32 nr, __u32 *failed_idx)
+{
+	struct liveupdate_session_preserve_fds arg = {
+		.size = sizeof(arg),
+		.nr = nr,
+		.fds = (__u64)(uintptr_t)fds,
+		.tokens = (__u64)(uintptr_t)tokens,
+	};
+	int ret = 0;
+
+	if (ioctl(session_fd, LIVEUPDATE_SESSION_PRESERVE_FDS, &arg))
+		ret = -errno;
+
+	if (failed_idx)
+		*failed_idx = arg.out_failed_index;
+
+	return ret;
+}
+
 int luo_session_retrieve_fd(int session_fd, __u64 token)
 {
 	struct liveupdate_session_retrieve_fd arg = {
