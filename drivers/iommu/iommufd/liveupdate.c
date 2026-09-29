@@ -351,6 +351,7 @@ static struct liveupdate_file_ops iommufd_ser_file_ops = {
 static struct liveupdate_file_handler iommufd_ser_handler = {
 	.compatible = IOMMUFD_LUO_COMPATIBLE,
 	.ops = &iommufd_ser_file_ops,
+	.level = LIVEUPDATE_LEVEL_MAPPER,
 };
 
 int iommufd_liveupdate_register(void)
