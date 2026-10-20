@@ -1458,7 +1458,7 @@ static void intel_iommu_init_qi(struct intel_iommu *iommu)
  * Returns 0 when the ID is reserved, was already reserved, or cannot be
  * re-assigned, and a negative errno for a genuine allocation failure.
  */
-static int reserve_domain_id(struct intel_iommu *iommu, int did)
+int reserve_domain_id(struct intel_iommu *iommu, int did)
 {
 	int ret;
 
@@ -2267,28 +2267,17 @@ int dmar_parse_one_satc(struct acpi_dmar_header *hdr, void *arg)
 static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 {
 	struct intel_iommu *iommu = dmaru->iommu;
-	struct iommu_hw_ser *iommu_ser;
 	int ret;
-
-	/* Use IOMMU HW unit MMIO base to identify the preserved state. */
-	iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
 
 	/*
 	 * Disable translation if already enabled prior to OS handover.
 	 */
-	if (!iommu_ser && iommu->gcmd & DMA_GCMD_TE)
+	if (iommu->gcmd & DMA_GCMD_TE)
 		iommu_disable_translation(iommu);
 
-	if (iommu_ser) {
-		if (WARN_ON(dmaru->ignored))
-			return -EINVAL;
-
-		intel_iommu_liveupdate_restore_root_table(iommu, iommu_ser);
-	} else {
-		ret = iommu_alloc_root_entry(iommu);
-		if (ret)
-			goto out;
-	}
+	ret = iommu_alloc_root_entry(iommu);
+	if (ret)
+		goto out;
 
 	intel_svm_check(iommu);
 
@@ -2314,8 +2303,7 @@ static int intel_iommu_add(struct dmar_drhd_unit *dmaru)
 	if (ret)
 		goto out;
 
-	if (!iommu_ser)
-		iommu_set_root_entry(iommu);
+	iommu_set_root_entry(iommu);
 
 	iommu_enable_translation(iommu);
 
@@ -2832,7 +2820,14 @@ int __init intel_iommu_init(void)
 		 * to avoid unnecessary lock order splat.
 		 */
 		up_read(&dmar_global_lock);
-		iommu_device_register(&iommu->iommu, &intel_iommu_ops, NULL);
+		ret = iommu_device_register(&iommu->iommu, &intel_iommu_ops, NULL);
+		/*
+		 * The preserved devices keep doing DMA through the preserved
+		 * translation tables, so the IOMMU must take ownership of them.
+		 */
+		if (ret && iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL))
+			panic("%s: failed to register IOMMU with preserved state: %d\n",
+			      iommu->name, ret);
 		down_read(&dmar_global_lock);
 
 		iommu_pmu_register(iommu);

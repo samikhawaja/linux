@@ -167,14 +167,14 @@ struct iommu_device_ser {
 
 /**
  * struct iommu_intel_ser - Serialized state of an Intel IOMMU instance
- * @restored: Whether IOMMU state is restored
+ * @sm_enabled: Whether the IOMMU was used in scalable mode
  * @phys_addr: Physical address of the IOMMU register base
  * @root_table: Physical address of the root entry table
  * @context_tables_bitmap: Bitmap representing the context tables that are
  * preserved.
  */
 struct iommu_intel_ser {
-	u8 restored;
+	u8 sm_enabled;
 	u8 padding[7];
 	u64 phys_addr;
 	u64 root_table;

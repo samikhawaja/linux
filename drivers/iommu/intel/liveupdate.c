@@ -273,23 +273,48 @@ static int preserve_iommu_context_tables(struct device_domain_info *info)
 	return 0;
 }
 
-static void restore_iommu_context(struct intel_iommu *iommu)
+static int restore_context_table(struct intel_iommu *iommu,
+				 struct iommu_hw_ser *ser,
+				 u8 bus, u8 devfn, u64 root_val)
 {
-	struct context_entry *context;
+	bool present = root_val & 1;
+
+	/*
+	 * The root entries of unpreserved context tables are cleared during
+	 * shutdown, so the preserved bitmap must match the present bits.
+	 */
+	if (is_context_table_preserved(iommu, ser, bus, devfn) != present)
+		return -EINVAL;
+
+	if (present)
+		iommu_restore_pages(root_val & VTD_PAGE_MASK);
+
+	return 0;
+}
+
+static int restore_iommu_context(struct intel_iommu *iommu,
+				 struct iommu_hw_ser *ser)
+{
+	struct root_entry *root;
+	int ret;
 	int i;
 
 	for (i = 0; i < ROOT_ENTRY_NR; i++) {
-		context = iommu_context_addr(iommu, i, 0, 0);
-		if (context)
-			iommu_restore_pages(virt_to_phys(context));
+		root = &iommu->root_entry[i];
+
+		ret = restore_context_table(iommu, ser, i, 0, root->lo);
+		if (ret)
+			return ret;
 
 		if (!sm_supported(iommu))
 			continue;
 
-		context = iommu_context_addr(iommu, i, 0x80, 0);
-		if (context)
-			iommu_restore_pages(virt_to_phys(context));
+		ret = restore_context_table(iommu, ser, i, 0x80, root->hi);
+		if (ret)
+			return ret;
 	}
+
+	return 0;
 }
 
 static int _restore_used_domain_ids(struct iommu_device_ser *ser, void *arg)
@@ -297,7 +322,6 @@ static int _restore_used_domain_ids(struct iommu_device_ser *ser, void *arg)
 	int id = ser->domain_iommu_ser.attachment_id;
 	struct iommu_hw_ser *iommu_hw_ser;
 	struct intel_iommu *iommu = arg;
-	int ret;
 
 	if (WARN_ON(!ser->domain_iommu_ser.iommu_phys))
 		return 0;
@@ -310,22 +334,7 @@ static int _restore_used_domain_ids(struct iommu_device_ser *ser, void *arg)
 	if (iommu_hw_ser->intel.phys_addr != iommu->reg_phys)
 		return 0;
 
-	guard(mutex)(&iommu->did_lock);
-
-	/*
-	 * The domain IDs are reclaimed while the IOMMU HW unit is being
-	 * restored and not registered with the IOMMU core. So if the ID already
-	 * exists, it is safe to assume that a preserved device sharing the same
-	 * domain ID reclaimed it.
-	 */
-	if (ida_exists(&iommu->domain_ida, id))
-		return 0;
-
-	ret = ida_alloc_range(&iommu->domain_ida, id, id, GFP_KERNEL);
-	if (ret < 0)
-		return ret;
-
-	return 0;
+	return reserve_domain_id(iommu, id);
 }
 
 /**
@@ -336,20 +345,37 @@ static int _restore_used_domain_ids(struct iommu_device_ser *ser, void *arg)
  * Restores the preserved root table and context tables for the IOMMU hardware
  * instance across Live Update, and reclaims all domain IDs previously allocated
  * to preserved devices so they are not reused.
+ *
+ * The preserved devices keep doing DMA through the preserved translation
+ * tables, so a failure to restore them is fatal.
  */
 void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 					       struct iommu_hw_ser *iommu_ser)
 {
-	if (!iommu_ser->intel.restored)
-		iommu_restore_pages(iommu_ser->intel.root_table);
+	int ret;
 
+	/*
+	 * The kernel command line might have changed across kexec, e.g.
+	 * intel_iommu=sm_off, so make sure the preserved tables are in the
+	 * format this kernel is going to use.
+	 */
+	if (iommu_ser->intel.sm_enabled != sm_supported(iommu))
+		panic("%s: preserved scalable mode %u does not match current %u\n",
+		      iommu->name, iommu_ser->intel.sm_enabled,
+		      sm_supported(iommu));
+
+	iommu_restore_pages(iommu_ser->intel.root_table);
 	iommu->root_entry = __va(iommu_ser->intel.root_table);
 
-	if (!iommu_ser->intel.restored)
-		restore_iommu_context(iommu);
+	ret = restore_iommu_context(iommu, iommu_ser);
+	if (ret)
+		panic("%s: failed to restore preserved context tables\n",
+		      iommu->name);
 
-	iommu_ser->intel.restored = 1;
-	BUG_ON(iommu_for_each_preserved_device(_restore_used_domain_ids, iommu));
+	ret = iommu_for_each_preserved_device(_restore_used_domain_ids, iommu);
+	if (ret)
+		panic("%s: failed to reclaim preserved domain IDs: %d\n",
+		      iommu->name, ret);
 }
 
 static void domain_detach_reattached_iommu(struct dmar_domain *domain,
@@ -691,6 +717,7 @@ int intel_iommu_preserve(struct iommu_device *iommu_dev,
 	if (ret)
 		return ret;
 
+	ser->intel.sm_enabled = sm_supported(iommu);
 	ser->intel.phys_addr = iommu->reg_phys;
 	ser->intel.root_table = __pa(iommu->root_entry);
 	ser->type = IOMMU_INTEL;
