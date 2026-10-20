@@ -65,6 +65,11 @@ static int preserve_context_table(struct intel_iommu *iommu,
 	 * Intel IOMMU context tables are never freed by the driver once
 	 * allocated. It is safe to access the context pointer outside of the
 	 * iommu->lock.
+	 *
+	 * The check and set of the context_tables_bitmap below is not atomic.
+	 * This is fine as the IOMMU core serializes the preserve_device() and
+	 * unpreserve() callbacks using the lock of its liveupdate FLB object.
+	 * That lock is private to the IOMMU core, so it cannot be asserted here.
 	 */
 	if (context && !is_context_table_preserved(iommu, ser, bus, devfn)) {
 		ret = iommu_preserve_pages(context);
@@ -594,6 +599,14 @@ int intel_iommu_preserve_device(struct device *dev,
 	if (info->ats_supported)
 		return -EOPNOTSUPP;
 
+	/*
+	 * intel_iommu_preserve() is only called once per IOMMU, when the first
+	 * device behind it is preserved. The context tables are allocated on
+	 * demand as devices are probed, so new context tables might have been
+	 * allocated since then. Preserve all the currently allocated context
+	 * tables every time a device is preserved, so the context tables of the
+	 * device being preserved are always covered.
+	 */
 	ret = preserve_iommu_context_tables(info);
 	if (ret)
 		return ret;
