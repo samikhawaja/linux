@@ -378,6 +378,22 @@ void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 		      iommu->name, ret);
 }
 
+/**
+ * intel_iommu_handle_drhd_restore_failure() - Panic if a DRHD unit with preserved state fails initialization
+ * @iommu: Target IOMMU
+ */
+void intel_iommu_handle_drhd_restore_failure(struct intel_iommu *iommu)
+{
+	/*
+	 * The preserved devices keep doing DMA through the preserved
+	 * translation tables, so a failure to restore and register the IOMMU
+	 * is fatal.
+	 */
+	if (iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL))
+		panic("%s: failed to restore IOMMU with preserved state\n",
+		      iommu->name);
+}
+
 static void domain_detach_reattached_iommu(struct dmar_domain *domain,
 					   struct intel_iommu *iommu)
 {

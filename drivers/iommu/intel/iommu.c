@@ -987,28 +987,24 @@ static void iommu_disable_translation(struct intel_iommu *iommu)
 
 static void release_dmar_iommu(struct intel_iommu *iommu)
 {
-	struct iommu_hw_ser *iommu_ser;
+	intel_iommu_handle_drhd_restore_failure(iommu);
 
-	iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
-	if (!iommu_ser) {
-		/*
-		 * All iommu domains must have been detached from the devices,
-		 * hence there should be no domain IDs in use.
-		 */
-		WARN_ON(!ida_is_empty(&iommu->domain_ida));
+	/*
+	 * All iommu domains must have been detached from the devices,
+	 * hence there should be no domain IDs in use.
+	 */
+	WARN_ON(!ida_is_empty(&iommu->domain_ida));
 
-		if ((iommu->gcmd & DMA_GCMD_TE))
-			iommu_disable_translation(iommu);
-	}
+	if ((iommu->gcmd & DMA_GCMD_TE))
+		iommu_disable_translation(iommu);
 
 	if (iommu->copied_tables) {
 		bitmap_free(iommu->copied_tables);
 		iommu->copied_tables = NULL;
 	}
 
-	/* free context mapping if there is no serialized state. */
-	if (!iommu_ser)
-		free_context_table(iommu);
+	/* free context mapping */
+	free_context_table(iommu);
 
 	if (ecap_prs(iommu->ecap))
 		intel_iommu_finish_prq(iommu);
@@ -1757,11 +1753,7 @@ static int __init init_dmars(void)
 	for_each_iommu(iommu, drhd) {
 		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
 		if (drhd->ignored) {
-			if (WARN_ON(iommu_ser)) {
-				ret = -EINVAL;
-				goto free_iommu;
-			}
-
+			intel_iommu_handle_drhd_restore_failure(iommu);
 			iommu_disable_translation(iommu);
 			continue;
 		}
@@ -2820,14 +2812,8 @@ int __init intel_iommu_init(void)
 		 * to avoid unnecessary lock order splat.
 		 */
 		up_read(&dmar_global_lock);
-		ret = iommu_device_register(&iommu->iommu, &intel_iommu_ops, NULL);
-		/*
-		 * The preserved devices keep doing DMA through the preserved
-		 * translation tables, so the IOMMU must take ownership of them.
-		 */
-		if (ret && iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL))
-			panic("%s: failed to register IOMMU with preserved state: %d\n",
-			      iommu->name, ret);
+		if (iommu_device_register(&iommu->iommu, &intel_iommu_ops, NULL))
+			intel_iommu_handle_drhd_restore_failure(iommu);
 		down_read(&dmar_global_lock);
 
 		iommu_pmu_register(iommu);
