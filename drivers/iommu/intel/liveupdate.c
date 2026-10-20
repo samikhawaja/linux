@@ -125,10 +125,13 @@ static void clear_unpreserved_context(struct device_domain_info *info, u8 bus, u
 	 * invalidate all cleared entries.
 	 *
 	 * Note that the device IOTLB invalidation for unpreserved devices is
-	 * skipped this way, but that should not be needed as the devices are
-	 * quiesced at this point. This should improve the performance of the
-	 * cleanup process and avoids any invalidation timeouts because drivers
-	 * might have moved devices to D3 state.
+	 * skipped this way. This matches the normal kexec reboot, where the
+	 * IOMMU translation is disabled without invalidating the device IOTLBs,
+	 * and the unpreserved devices go through the same flow in the next
+	 * kernel as they do after a normal kexec reboot. Issuing device IOTLB
+	 * invalidations this late during shutdown could also cause invalidation
+	 * timeouts, as drivers might have moved devices to a low power state,
+	 * and would add to the shutdown time.
 	 *
 	 * The iommu lock is not needed as the context tables are never removed
 	 * and the new ones are not added during shutdown.
