@@ -252,7 +252,7 @@ struct iommu_domain {
 	};
 
 #ifdef CONFIG_IOMMU_LIVEUPDATE
-	struct iommu_domain_ser *preserved_state;
+	struct iommu_domain_ser *domain_ser;
 #endif
 };
 
@@ -838,8 +838,7 @@ struct iommu_domain_ops {
  * @singleton_group: Used internally for drivers that have only one group
  * @max_pasids: number of supported PASIDs
  * @ready: set once iommu_device_register() has completed successfully
- * @outgoing_preserved_state: preserved iommu state of outgoing kernel for
- * liveupdate.
+ * @iommu_ser: preserved iommu state of outgoing kernel for liveupdate.
  */
 struct iommu_device {
 	struct list_head list;
@@ -851,7 +850,7 @@ struct iommu_device {
 	bool ready;
 
 #ifdef CONFIG_IOMMU_LIVEUPDATE
-	struct iommu_hw_ser *outgoing_preserved_state;
+	struct iommu_hw_ser *iommu_ser;
 #endif
 };
 
@@ -892,6 +891,8 @@ struct iommu_fault_param {
  * @pci_32bit_workaround: Limit DMA allocations to 32-bit IOVAs
  * @require_direct: device requires IOMMU_RESV_DIRECT regions
  * @shadow_on_flush: IOTLB flushes are used to sync shadow tables
+ * @device_ser: preserved (outgoing) or restored (incoming) liveupdate state
+ *		of this device
  *
  * TODO: migrate other per device data pointers under iommu_dev_data, e.g.
  *	struct iommu_group	*iommu_group;
@@ -1228,23 +1229,13 @@ void dev_iommu_priv_set(struct device *dev, void *priv);
  * typedef iommu_dev_iter_fn - Callback for iterating IOMMU attached devices
  * @dev: Attached device
  * @iommu: IOMMU instance
- * @arg: Private argument passed to iterator
  *
  * Return: 0 on success, or negative error code.
  */
 typedef int (*iommu_dev_iter_fn)(struct device *dev,
-				 struct iommu_device *iommu, void *arg);
+				 struct iommu_device *iommu);
 
-/**
- * struct iommu_dev_iter - Iterator for devices attached to an IOMMU
- */
-struct iommu_dev_iter {
-	struct iommu_device *iommu;
-	iommu_dev_iter_fn fn;
-	void *arg;
-};
-
-int iommu_for_each_dev(struct iommu_dev_iter *iter);
+int iommu_for_each_dev(struct iommu_device *iommu, iommu_dev_iter_fn fn);
 
 extern struct mutex iommu_probe_device_lock;
 int iommu_probe_device(struct device *dev);

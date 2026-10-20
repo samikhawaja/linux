@@ -330,28 +330,38 @@ void iommu_device_unregister(struct iommu_device *iommu)
 }
 EXPORT_SYMBOL_GPL(iommu_device_unregister);
 
+struct iommu_dev_iter {
+	struct iommu_device *iommu;
+	iommu_dev_iter_fn fn;
+};
+
 static int _iommu_for_each_dev_cb(struct device *dev, void *data)
 {
 	struct iommu_dev_iter *iter = data;
 
 	if (dev->iommu && dev->iommu->iommu_dev == iter->iommu)
-		return iter->fn(dev, iter->iommu, iter->arg);
+		return iter->fn(dev, iter->iommu);
 
 	return 0;
 }
 
 /**
  * iommu_for_each_dev() - Iterate over all devices attached to an IOMMU
- * @iter: Device iterator context
+ * @iommu: IOMMU instance
+ * @fn: Callback to call for each device attached to @iommu
  *
  * Return: 0 on success, or negative error code.
  */
-int iommu_for_each_dev(struct iommu_dev_iter *iter)
+int iommu_for_each_dev(struct iommu_device *iommu, iommu_dev_iter_fn fn)
 {
+	struct iommu_dev_iter iter = {
+		.iommu = iommu,
+		.fn = fn,
+	};
 	int ret;
 
 	for (int i = 0; i < ARRAY_SIZE(iommu_buses); i++) {
-		ret = bus_for_each_dev(iommu_buses[i], NULL, iter,
+		ret = bus_for_each_dev(iommu_buses[i], NULL, &iter,
 				       _iommu_for_each_dev_cb);
 		if (ret)
 			return ret;

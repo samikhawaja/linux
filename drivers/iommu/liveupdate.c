@@ -441,7 +441,7 @@ int iommu_preserve_domain(struct iommu_domain *domain, struct iommu_domain_ser *
 		return ret;
 
 	mutex_lock(&flb_obj->lock);
-	if (domain->preserved_state) {
+	if (domain->domain_ser) {
 		ret = -EBUSY;
 		goto out_unlock;
 	}
@@ -458,7 +458,7 @@ int iommu_preserve_domain(struct iommu_domain *domain, struct iommu_domain_ser *
 		goto out_unlock;
 	}
 
-	domain->preserved_state = domain_ser;
+	domain->domain_ser = domain_ser;
 	*ser = domain_ser;
 	ret = 0;
 out_unlock:
@@ -487,7 +487,7 @@ void iommu_unpreserve_domain(struct iommu_domain *domain)
 		return;
 
 	mutex_lock(&flb_obj->lock);
-	if (!domain->preserved_state)
+	if (!domain->domain_ser)
 		goto out_unlock;
 
 	/*
@@ -498,10 +498,10 @@ void iommu_unpreserve_domain(struct iommu_domain *domain)
 	 * invoked, ensuring a consistent cleanup without needing explicit
 	 * refcounting for the serialized objects here.
 	 */
-	domain_ser = domain->preserved_state;
+	domain_ser = domain->domain_ser;
 	pt->ops->unpreserve(pt, domain_ser);
 	domain_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
-	domain->preserved_state = NULL;
+	domain->domain_ser = NULL;
 out_unlock:
 	mutex_unlock(&flb_obj->lock);
 	liveupdate_flb_put_outgoing(&iommu_flb);
@@ -531,8 +531,8 @@ static int iommu_preserve_locked(struct iommu_device *iommu,
 		return -EOPNOTSUPP;
 
 	lockdep_assert_held(&flb_obj->lock);
-	if (iommu->outgoing_preserved_state) {
-		iommu->outgoing_preserved_state->hdr.ref_count++;
+	if (iommu->iommu_ser) {
+		iommu->iommu_ser->hdr.ref_count++;
 		return 0;
 	}
 
@@ -546,14 +546,14 @@ static int iommu_preserve_locked(struct iommu_device *iommu,
 		return ret;
 	}
 
-	iommu->outgoing_preserved_state = iommu_hw_ser;
+	iommu->iommu_ser = iommu_hw_ser;
 	return ret;
 }
 
 static void iommu_unpreserve_locked(struct iommu_device *iommu,
 				    struct iommu_flb_obj *flb_obj)
 {
-	struct iommu_hw_ser *iommu_hw_ser = iommu->outgoing_preserved_state;
+	struct iommu_hw_ser *iommu_hw_ser = iommu->iommu_ser;
 
 	lockdep_assert_held(&flb_obj->lock);
 	if (WARN_ON(!iommu_hw_ser))
@@ -567,7 +567,7 @@ static void iommu_unpreserve_locked(struct iommu_device *iommu,
 	if (iommu_hw_ser->hdr.ref_count)
 		return;
 
-	iommu->outgoing_preserved_state = NULL;
+	iommu->iommu_ser = NULL;
 	iommu->ops->unpreserve(iommu, iommu_hw_ser);
 	iommu_hw_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
 }
@@ -621,7 +621,7 @@ int iommu_preserve_device(struct iommu_domain *domain,
 		return ret;
 
 	mutex_lock(&flb_obj->lock);
-	if (!domain->preserved_state) {
+	if (!domain->domain_ser) {
 		ret = -EINVAL;
 		goto out_unlock;
 	}
@@ -643,8 +643,8 @@ int iommu_preserve_device(struct iommu_domain *domain,
 		goto out_unlock;
 	}
 
-	device_ser->domain_iommu_ser.domain_phys = virt_to_phys(domain->preserved_state);
-	device_ser->domain_iommu_ser.iommu_phys = virt_to_phys(iommu->iommu_dev->outgoing_preserved_state);
+	device_ser->domain_iommu_ser.domain_phys = virt_to_phys(domain->domain_ser);
+	device_ser->domain_iommu_ser.iommu_phys = virt_to_phys(iommu->iommu_dev->iommu_ser);
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain_nr = pci_domain_nr(pdev->bus);
 	device_ser->dma_owner_token = dma_owner_token;
@@ -824,7 +824,7 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 
 	/* The device is owned by the preserved state. */
 	*owner = ser;
-	domain->preserved_state = domain_ser;
+	domain->domain_ser = domain_ser;
 	domain_ser->restored_domain = domain;
 
 out:

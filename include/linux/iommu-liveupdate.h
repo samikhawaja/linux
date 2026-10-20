@@ -57,7 +57,7 @@ static inline void *iommu_domain_restored_state(struct iommu_domain *domain)
 {
 	struct iommu_domain_ser *ser;
 
-	ser = domain->preserved_state;
+	ser = domain->domain_ser;
 	if (ser && (ser->hdr.flags & IOMMU_SER_FLAG_INCOMING))
 		return ser;
 
@@ -124,7 +124,7 @@ void iommu_unpreserve_device(struct iommu_domain *domain, struct device *dev);
  */
 static inline void *iommu_preserved_state(struct iommu_device *iommu)
 {
-	return iommu->outgoing_preserved_state;
+	return iommu->iommu_ser;
 }
 #else
 static inline int iommu_liveupdate_register_flb(struct liveupdate_file_handler *handler)

@@ -150,8 +150,7 @@ static int clear_unpreserved_alias_cb(struct pci_dev *pdev, u16 alias, void *dat
 }
 
 static int clear_unpreserve_context_entry_fn(struct device *dev,
-					     struct iommu_device *iommu_dev,
-					     void *arg)
+					     struct iommu_device *iommu_dev)
 {
 	struct device_domain_info *info;
 
@@ -179,13 +178,6 @@ static int clear_unpreserve_context_entry_fn(struct device *dev,
  */
 void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 {
-	struct iommu_dev_iter iter = {
-		.fn = clear_unpreserve_context_entry_fn,
-		.iommu = &iommu->iommu,
-		.arg = NULL,
-
-	};
-
 	/*
 	 * Clear context entries for unpreserved devices because during kexec
 	 * reboot and shutdown the devices do not go through the release flow,
@@ -194,7 +186,7 @@ void clear_unpreserved_context_entries(struct intel_iommu *iommu)
 	 * Note that the error can be ignored as the iterator function does not
 	 * fail.
 	 */
-	iommu_for_each_dev(&iter);
+	iommu_for_each_dev(&iommu->iommu, clear_unpreserve_context_entry_fn);
 
 	/*
 	 * New unpreserved context tables for unpreserved devices might have
