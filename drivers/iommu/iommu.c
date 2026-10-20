@@ -711,7 +711,8 @@ static int __iommu_probe_device(struct device *dev, struct list_head *group_list
 
 	for_each_group_device(group, gdev2) {
 		if (dev_iommu_preserved_state(gdev2->dev) ||
-		    dev_iommu_restored_state(gdev2->dev)) {
+		    dev_iommu_restored_state(gdev2->dev) ||
+		    dev_iommu_restored_state(dev)) {
 			ret = -EBUSY;
 			goto err_free_gdev;
 		}
@@ -820,7 +821,8 @@ static void __iommu_group_free_device(struct iommu_group *group,
 	 */
 	if (list_empty(&group->devices))
 		WARN_ON(group->owner_cnt ||
-			(group->domain != group->default_domain &&
+			(group->domain &&
+			 group->domain != group->default_domain &&
 			 !iommu_domain_restored_state(group->domain)));
 
 	kfree(grp_dev->name);
@@ -2252,7 +2254,6 @@ static int __iommu_attach_device(struct iommu_domain *domain,
 	ret = domain->ops->attach_dev(domain, dev, old);
 	if (ret)
 		return ret;
-
 	dev->iommu->attach_deferred = 0;
 	trace_attach_device_to_domain(dev);
 	return 0;
@@ -3219,58 +3220,55 @@ EXPORT_SYMBOL_GPL(iommu_fwspec_add_ids);
 
 static struct device *__iommu_group_restored_device(struct iommu_group *group)
 {
-	struct group_device *gdev;
+	struct device *dev = iommu_group_first_dev(group);
 
-	lockdep_assert_held(&group->mutex);
-	for_each_group_device(group, gdev) {
-		if (!dev_is_pci(gdev->dev))
-			continue;
-
-		if (dev_iommu_restored_state(gdev->dev))
-			return gdev->dev;
-	}
+	if (dev_is_pci(dev) && dev_iommu_restored_state(dev))
+		return dev;
 
 	return NULL;
 }
 
-static int __iommu_group_restore_domain(struct iommu_group *group)
+static int __iommu_device_restore_domain(struct device *dev)
 {
+	struct iommu_group *group = dev->iommu_group;
 	struct iommu_device_ser *device_ser;
 	struct iommu_domain *domain;
-	struct device *dev;
-	void *owner;
 	int ret;
 
 	lockdep_assert_held(&group->mutex);
 	if (group->domain)
 		return -EBUSY;
 
-	dev = __iommu_group_restored_device(group);
 	device_ser = dev_iommu_restored_state(dev);
 	if (!device_ser)
 		return -ENOENT;
+
+	/*
+	 * Ownership of groups with preserved devices is set during boot. These
+	 * will be reclaimed later by the entity (iommufd) that preserved them.
+	 * Claim ownership before restoring the domain so that even if domain
+	 * restoration fails, no driver can bind to the device using
+	 * default_domain.
+	 */
+	WARN_ON(group->owner);
+	group->owner = device_ser;
+	group->owner_cnt = 1;
 
 	ret = __iommu_group_alloc_blocking_domain(group);
 	if (ret)
 		return ret;
 
-	domain = iommu_restore_domain(dev, device_ser, &owner);
-	if (WARN_ON(IS_ERR(domain)))
+	/*
+	 * If attaching the restored domain fails below, the domain is not
+	 * leaked; it remains cached in domain_ser->restored_domain and will be
+	 * reused if the device is rescanned.
+	 */
+	domain = iommu_restore_domain(dev, device_ser);
+	if (IS_ERR(domain))
 		return PTR_ERR(domain);
 
 	/* The restored domain is attached with the restored device. */
-	ret = __iommu_group_set_domain(group, domain);
-	if (ret)
-		return ret;
-
-	/*
-	 * Ownership of groups with preserved devices is set during boot. These
-	 * will be reclaimed later by the entity (iommufd) that preserved them.
-	 */
-	WARN_ON(group->owner);
-	group->owner = owner;
-	group->owner_cnt = 1;
-	return ret;
+	return __iommu_group_set_domain(group, domain);
 }
 
 /**
@@ -3289,9 +3287,10 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 	struct iommu_domain *old_dom = group->default_domain;
 	struct group_device *gdev;
 	struct iommu_domain *dom;
+	struct device *dev;
 	bool direct_failed;
 	int req_type;
-	int ret;
+	int ret = 0;
 
 	lockdep_assert_held(&group->mutex);
 
@@ -3333,11 +3332,9 @@ static int iommu_setup_default_domain(struct iommu_group *group,
 	group->default_domain = dom;
 
 	/* Preserved devices need to be attached to the restore domain */
-	if (__iommu_group_restored_device(group)) {
-		ret = __iommu_group_restore_domain(group);
-		if (ret)
-			goto err_restore_def_domain;
-
+	dev = __iommu_group_restored_device(group);
+	if (dev) {
+		WARN_ON(__iommu_device_restore_domain(dev));
 		goto out_free_old;
 	}
 

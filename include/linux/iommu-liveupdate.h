@@ -85,15 +85,16 @@ static inline void *dev_iommu_restored_state(struct device *dev)
 }
 
 /**
- * dev_iommu_restore_did() - Get restored domain ID for a device
+ * dev_iommu_restored_attachment_id() - Get restored attachment ID for a device
  * @dev: Target device
  * @domain: Target domain
  *
- * Fetches the domain ID preserved for @dev and @domain across Live Update.
+ * Fetches the attachment ID preserved for @dev and @domain across Live Update.
  *
- * Return: Domain ID or -1 on error.
+ * Return: Attachment ID or -1 on error.
  */
-static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain *domain)
+static inline int dev_iommu_restored_attachment_id(struct device *dev,
+						   struct iommu_domain *domain)
 {
 	struct iommu_device_ser *ser = dev_iommu_restored_state(dev);
 
@@ -104,8 +105,7 @@ static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain 
 }
 
 struct iommu_domain *iommu_restore_domain(struct device *dev,
-					  struct iommu_device_ser *ser,
-					  void **owner);
+					  struct iommu_device_ser *ser);
 int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 				    void *arg);
 void iommu_init_device_preserved_data(struct device *dev);
@@ -146,7 +146,8 @@ static inline void *dev_iommu_restored_state(struct device *dev)
 	return NULL;
 }
 
-static inline int dev_iommu_restore_did(struct device *dev, struct iommu_domain *domain)
+static inline int dev_iommu_restored_attachment_id(struct device *dev,
+						   struct iommu_domain *domain)
 {
 	return -1;
 }
@@ -157,8 +158,7 @@ static inline void *iommu_domain_restored_state(struct iommu_domain *domain)
 }
 
 static inline struct iommu_domain *iommu_restore_domain(struct device *dev,
-							struct iommu_device_ser *ser,
-							void **owner)
+							struct iommu_device_ser *ser)
 {
 	return NULL;
 }

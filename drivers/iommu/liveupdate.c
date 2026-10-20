@@ -732,7 +732,7 @@ static inline bool match_device_ser(struct iommu_device_ser *match,
  */
 void iommu_init_device_preserved_data(struct device *dev)
 {
-	struct iommu_device_ser *device_ser = NULL;
+	struct iommu_device_ser *device_ser;
 	struct iommu_device_array_ser *array;
 	struct iommu_flb_obj *flb_obj;
 	int ret, idx;
@@ -750,14 +750,13 @@ void iommu_init_device_preserved_data(struct device *dev)
 		iommu_liveupdate_for_each_obj(array, device_ser, idx) {
 			if (match_device_ser(device_ser, to_pci_dev(dev))) {
 				device_ser->hdr.flags |= IOMMU_SER_FLAG_INCOMING;
+				WRITE_ONCE(dev->iommu->device_ser, device_ser);
 				goto out;
 			}
 		}
 	}
 
-	device_ser = NULL;
 out:
-	WRITE_ONCE(dev->iommu->device_ser, device_ser);
 	mutex_unlock(&flb_obj->lock);
 	liveupdate_flb_put_incoming(&iommu_flb);
 }
@@ -767,7 +766,6 @@ EXPORT_SYMBOL(iommu_init_device_preserved_data);
  * iommu_restore_domain() - Restore a preserved domain for a device
  * @dev: Target device
  * @ser: Serialized device state
- * @owner: Pointer to store group owner handle
  *
  * Restores or reuses a restored preserved domain for @dev from serialized state
  * @ser.
@@ -775,8 +773,7 @@ EXPORT_SYMBOL(iommu_init_device_preserved_data);
  * Return: Restored iommu_domain pointer, or ERR_PTR.
  */
 struct iommu_domain *iommu_restore_domain(struct device *dev,
-					  struct iommu_device_ser *ser,
-					  void **owner)
+					  struct iommu_device_ser *ser)
 {
 	struct iommu_domain_ser *domain_ser;
 	struct iommu_flb_obj *flb_obj;
@@ -798,12 +795,11 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 
 	domain_ser = phys_to_virt(ser->domain_iommu_ser.domain_phys);
 	if (domain_ser->restored_domain) {
-		*owner = ser;
 		domain = domain_ser->restored_domain;
 		goto out;
 	}
 
-	domain_ser->hdr.flags |=  IOMMU_SER_FLAG_INCOMING;
+	domain_ser->hdr.flags |= IOMMU_SER_FLAG_INCOMING;
 	domain = iommu_paging_domain_alloc(dev);
 	if (IS_ERR(domain))
 		goto out;
@@ -822,8 +818,6 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 		goto out;
 	}
 
-	/* The device is owned by the preserved state. */
-	*owner = ser;
 	domain->domain_ser = domain_ser;
 	domain_ser->restored_domain = domain;
 
