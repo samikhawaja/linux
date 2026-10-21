@@ -1395,7 +1395,7 @@ struct iommu_hw_queue_alloc {
 /**
  * struct iommu_hwpt_liveupdate_mark_preserve - ioctl(IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE)
  * @size: sizeof(struct iommu_hwpt_liveupdate_mark_preserve)
- * @hwpt_id: Iommufd object ID of the target HWPT
+ * @hwpt_id: HW pagetable ID to preserve for liveupdate
  * @hwpt_token: Token to identify this hwpt upon restore
  *
  * The target HWPT will be preserved during iommufd preservation.
