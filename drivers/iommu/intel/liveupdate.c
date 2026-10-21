@@ -394,8 +394,8 @@ void intel_iommu_handle_drhd_restore_failure(struct intel_iommu *iommu)
 		      iommu->name);
 }
 
-static void domain_detach_reattached_iommu(struct dmar_domain *domain,
-					   struct intel_iommu *iommu)
+static void domain_detach_restored_iommu(struct dmar_domain *domain,
+					 struct intel_iommu *iommu)
 {
 	struct iommu_domain_info *info;
 
@@ -407,9 +407,9 @@ static void domain_detach_reattached_iommu(struct dmar_domain *domain,
 	}
 }
 
-static int domain_reattach_iommu(struct dmar_domain *domain,
-				 struct intel_iommu *iommu,
-				 struct iommu_device_ser *device_ser)
+static int domain_attach_restored_iommu(struct dmar_domain *domain,
+					struct intel_iommu *iommu,
+					struct iommu_device_ser *device_ser)
 {
 	struct iommu_domain_info *info, *curr;
 	struct iommu_domain_ser *domain_ser;
@@ -467,14 +467,14 @@ err_unlock:
 }
 
 /**
- * intel_iommu_restore_device() - Restore device domain attachment after live update
+ * intel_iommu_attach_restored_device() - Restore device domain attachment after live update
  * @domain: Restored domain
  * @dev: Restored device
  *
  * Return: 0 on success, or negative error code.
  */
-int intel_iommu_restore_device(struct iommu_domain *domain,
-			       struct device *dev)
+int intel_iommu_attach_restored_device(struct iommu_domain *domain,
+				       struct device *dev)
 {
 	struct iommu_device_ser *device_ser = dev_iommu_restored_state(dev);
 	struct device_domain_info *info = dev_iommu_priv_get(dev);
@@ -486,10 +486,7 @@ int intel_iommu_restore_device(struct iommu_domain *domain,
 	if (!device_ser)
 		return -EINVAL;
 
-	if (dev_is_real_dma_subdevice(dev))
-		return -EOPNOTSUPP;
-
-	ret = domain_reattach_iommu(dmar_domain, iommu, device_ser);
+	ret = domain_attach_restored_iommu(dmar_domain, iommu, device_ser);
 	if (ret)
 		return ret;
 
@@ -499,30 +496,7 @@ int intel_iommu_restore_device(struct iommu_domain *domain,
 	list_add(&info->link, &dmar_domain->devices);
 	spin_unlock_irqrestore(&dmar_domain->lock, flags);
 
-	ret = cache_tag_assign_domain(dmar_domain, dev, IOMMU_NO_PASID);
-	if (ret)
-		goto err;
-
-	ret = iopf_for_domain_set(domain, dev);
-	if (ret)
-		goto err;
-
 	return 0;
-
-err:
-	/*
-	 * Detach the restored domain from device and iommu on failure, but keep
-	 * the hardware state intact.
-	 */
-	info->domain_attached = false;
-	cache_tag_unassign_domain(info->domain, dev, IOMMU_NO_PASID);
-	spin_lock_irqsave(&info->domain->lock, flags);
-	list_del(&info->link);
-	spin_unlock_irqrestore(&info->domain->lock, flags);
-
-	domain_detach_reattached_iommu(info->domain, iommu);
-	info->domain = NULL;
-	return ret;
 }
 
 int intel_iommu_detach_restored_device(struct device *dev)
@@ -539,15 +513,13 @@ int intel_iommu_detach_restored_device(struct device *dev)
 	if (!iommu_domain_restored_state(domain))
 		return -EINVAL;
 
-	iopf_for_domain_remove(domain, dev);
-	cache_tag_unassign_domain(info->domain, dev, IOMMU_NO_PASID);
 	info->domain_attached = false;
 
 	spin_lock_irqsave(&info->domain->lock, flags);
 	list_del(&info->link);
 	spin_unlock_irqrestore(&info->domain->lock, flags);
 
-	domain_detach_reattached_iommu(info->domain, iommu);
+	domain_detach_restored_iommu(info->domain, iommu);
 	info->domain = NULL;
 
 	return 0;

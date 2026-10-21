@@ -1322,8 +1322,8 @@ void clear_unpreserved_context_entries(struct intel_iommu *iommu);
 void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 					       struct iommu_hw_ser *iommu_ser);
 void intel_iommu_handle_drhd_restore_failure(struct intel_iommu *iommu);
-int intel_iommu_restore_device(struct iommu_domain *domain,
-			       struct device *dev);
+int intel_iommu_attach_restored_device(struct iommu_domain *domain,
+				       struct device *dev);
 int intel_iommu_detach_restored_device(struct device *dev);
 #else
 static inline void clear_unpreserved_context_entries(struct intel_iommu *iommu)
@@ -1339,8 +1339,8 @@ static inline void intel_iommu_handle_drhd_restore_failure(struct intel_iommu *i
 {
 }
 
-static inline int intel_iommu_restore_device(struct iommu_domain *domain,
-					     struct device *dev)
+static inline int intel_iommu_attach_restored_device(struct iommu_domain *domain,
+						     struct device *dev)
 {
 	return -EOPNOTSUPP;
 }

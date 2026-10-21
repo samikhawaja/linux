@@ -3285,7 +3285,7 @@ static int intel_iommu_attach_device(struct iommu_domain *domain,
 	int ret;
 
 	if (dev_iommu_restored_state(dev))
-		return intel_iommu_restore_device(domain, dev);
+		return intel_iommu_attach_restored_device(domain, dev);
 
 	device_block_translation(dev);
 
