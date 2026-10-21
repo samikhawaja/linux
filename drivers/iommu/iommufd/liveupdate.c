@@ -19,20 +19,17 @@
 #include "iommufd_private.h"
 #include "io_pagetable.h"
 
-static bool ioas_set_immutable(struct iommufd_ioas *ioas, bool set)
+static u32 iopt_inc_num_preserved_domains(struct io_pagetable *iopt)
 {
-	bool was_immutable;
+	guard(rwsem_write)(&iopt->domains_rwsem);
+	return ++iopt->num_preserved_domains;
+}
 
-	down_write(&ioas->iopt.domains_rwsem);
-	was_immutable = ioas->iopt.nr_preserved_domains > 0;
-	if (set)
-		ioas->iopt.nr_preserved_domains++;
-	else if (!WARN_ON(!was_immutable))
-		ioas->iopt.nr_preserved_domains--;
-
-	up_write(&ioas->iopt.domains_rwsem);
-
-	return was_immutable;
+static void iopt_dec_num_preserved_domains(struct io_pagetable *iopt)
+{
+	guard(rwsem_write)(&iopt->domains_rwsem);
+	if (!WARN_ON(!iopt->num_preserved_domains))
+		iopt->num_preserved_domains--;
 }
 
 int iommufd_hwpt_liveupdate_mark_preserve(struct iommufd_ucmd *ucmd)
@@ -93,16 +90,47 @@ out_unlock:
 	return rc;
 }
 
-static int check_iopt_pages_preserved(struct liveupdate_session *s,
-				      struct iommufd_hwpt_paging *hwpt)
+static int iopt_area_validate_file_pages(struct iopt_area *area)
 {
-	u32 req_seals = F_SEAL_SEAL | F_SEAL_GROW | F_SEAL_SHRINK;
+	unsigned long last_index = iopt_area_last_index(area);
+	unsigned long index = iopt_area_index(area);
+	unsigned int page_offset = area->page_offset;
+	struct iopt_pages *pages = area->pages;
+	unsigned long iova = iopt_area_iova(area);
+
+	guard(mutex)(&pages->mutex);
+	if (WARN_ON(!area->storage_domain))
+		return -EINVAL;
+
+	while (index <= last_index) {
+		phys_addr_t phys = iommu_iova_to_phys(area->storage_domain,
+						      iova) - page_offset;
+		struct page *page = pfn_to_page(PHYS_PFN(phys));
+		struct folio *folio = page_folio(page);
+		unsigned long nr;
+
+		if (folio->mapping != pages->file->f_mapping)
+			return -EINVAL;
+
+		nr = folio_nr_pages(folio) - folio_page_idx(folio, page);
+		iova += nr * PAGE_SIZE - page_offset;
+		page_offset = 0;
+		index += nr;
+	}
+
+	return 0;
+}
+
+static int iopt_validate_preserved_memory(struct io_pagetable *iopt,
+					  struct liveupdate_session *s)
+{
 	struct iopt_area *area;
 	int ret = 0;
 
-	down_read(&hwpt->ioas->iopt.iova_rwsem);
-	for (area = iopt_area_iter_first(&hwpt->ioas->iopt, 0, ULONG_MAX); area;
+	down_read(&iopt->iova_rwsem);
+	for (area = iopt_area_iter_first(iopt, 0, ULONG_MAX); area;
 	     area = iopt_area_iter_next(area, 0, ULONG_MAX)) {
+		u32 req_seals = F_SEAL_SEAL | F_SEAL_GROW | F_SEAL_SHRINK;
 		struct iopt_pages *pages = area->pages;
 
 		if (!pages)
@@ -129,8 +157,16 @@ static int check_iopt_pages_preserved(struct liveupdate_session *s,
 		ret = liveupdate_get_token_outgoing(s, pages->file, NULL);
 		if (ret)
 			break;
+
+		/*
+		 * Make sure the mapped pages were not hole-punched before the
+		 * memfd was preserved and frozen.
+		 */
+		ret = iopt_area_validate_file_pages(area);
+		if (ret)
+			break;
 	}
-	up_read(&hwpt->ioas->iopt.iova_rwsem);
+	up_read(&iopt->iova_rwsem);
 
 	return ret;
 }
@@ -140,7 +176,6 @@ static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
 				 struct liveupdate_session *session)
 {
 	struct iommu_domain_ser *domain_ser;
-	bool was_immutable;
 	int rc;
 
 	/*
@@ -149,26 +184,23 @@ static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
 	 * HWPTs, if an error occurs this call needs to make the IOAS
 	 * mutable again if it was the one that made it immutable.
 	 */
-	was_immutable = ioas_set_immutable(hwpt->ioas, true);
-
-	if (!was_immutable) {
-		rc = check_iopt_pages_preserved(session, hwpt);
+	if (iopt_inc_num_preserved_domains(&hwpt->ioas->iopt) == 1) {
+		rc = iopt_validate_preserved_memory(&hwpt->ioas->iopt, session);
 		if (rc)
 			goto err;
 	}
 
 	hwpt_ser->token = hwpt->liveupdate_token;
-	hwpt_ser->reclaimed = false;
 
 	rc = iommu_preserve_domain(hwpt->common.domain, &domain_ser);
 	if (rc < 0)
 		goto err;
 
-	hwpt_ser->domain_data = virt_to_phys(domain_ser);
+	hwpt_ser->domain_ser_phys = virt_to_phys(domain_ser);
 	return 0;
 
 err:
-	ioas_set_immutable(hwpt->ioas, false);
+	iopt_dec_num_preserved_domains(&hwpt->ioas->iopt);
 	return rc;
 }
 
@@ -191,7 +223,7 @@ static void _iommufd_unpreserve(struct iommufd_ctx *ictx,
 		xa_unlock(&ictx->objects);
 
 		iommu_unpreserve_domain(hwpt->common.domain);
-		ioas_set_immutable(hwpt->ioas, false);
+		iopt_dec_num_preserved_domains(&hwpt->ioas->iopt);
 
 		hwpt->liveupdate_preserved = false;
 		iommufd_put_object(ictx, obj);
@@ -246,7 +278,6 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	}
 
 	iommufd_ser = mem;
-	iommufd_ser->nr_hwpts = nr_hwpts;
 
 	/* Preserve HWPTs */
 	i = 0;

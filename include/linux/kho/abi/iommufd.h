@@ -27,15 +27,12 @@
 
 /**
  * struct iommu_hwpt_ser - IOMMUFD HWPT serialized state
- * @domain_data: Physical address of the serialized state of associated domain
+ * @domain_ser_phys: Physical address of the serialized state of associated domain
  * @token: User provided token
- * @reclaimed: Whether the HWPT is reclaimed
  */
 struct iommufd_hwpt_ser {
-	u64 domain_data;
+	u64 domain_ser_phys;
 	u64 token;
-	u8 reclaimed;
-	u8 padding[7];
 } __packed;
 
 /**

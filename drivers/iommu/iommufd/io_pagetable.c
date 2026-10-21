@@ -30,6 +30,19 @@ struct iopt_pages_list {
 	unsigned long length;
 };
 
+static inline bool iopt_liveupdate_immutable(const struct io_pagetable *iopt)
+{
+	bool immutable = false;
+
+	lockdep_assert_held(&iopt->domains_rwsem);
+
+#ifdef CONFIG_IOMMU_LIVEUPDATE
+	/* iopt becomes immutable once liveupdate preservation starts */
+	immutable = iopt->num_preserved_domains;
+#endif
+	return immutable;
+}
+
 struct iopt_area *iopt_area_contig_init(struct iopt_area_contig_iter *iter,
 					struct io_pagetable *iopt,
 					unsigned long iova,

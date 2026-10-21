@@ -5,6 +5,7 @@
  * Samiullah Khawaja <skhawaja@google.com>
  */
 
+#define _GNU_SOURCE
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -98,7 +99,7 @@ static int create_sealed_memfd(size_t size)
 		_fd; \
 	})
 
-static void setup_iommufd(int iommufd, int memfd, int cdev_fd)
+static uint32_t setup_iommufd(int iommufd, int memfd, int cdev_fd)
 {
 	struct vfio_device_bind_iommufd bind = {
 		.argsz = sizeof(bind),
@@ -146,13 +147,25 @@ static void setup_iommufd(int iommufd, int memfd, int cdev_fd)
 	map_file.ioas_id = alloc_data.out_ioas_id;
 	test_ioctl(iommufd, IOMMU_IOAS_MAP_FILE, &map_file);
 
+	map_file.iova = SZ_4G + SZ_1M;
+	map_file.start = SZ_1M;
+	test_ioctl(iommufd, IOMMU_IOAS_MAP_FILE, &map_file);
+
 	mark_preserve.hwpt_id = attach_data.pt_id;
 	test_ioctl(iommufd, IOMMU_HWPT_LIVEUPDATE_MARK_PRESERVE, &mark_preserve);
+
+	return alloc_data.out_ioas_id;
 }
 
 static void before_kexec(int luo_fd)
 {
+	struct iommu_ioas_unmap unmap = {
+		.size = sizeof(unmap),
+		.iova = SZ_4G + SZ_1M,
+		.length = SZ_1M,
+	};
 	int iommufd, cdev_fd, memfd, session;
+	uint32_t ioas_id;
 
 	create_state_file(luo_fd, state_session, STATE_TOKEN, /*next_stage=*/2);
 
@@ -161,10 +174,10 @@ static void before_kexec(int luo_fd)
 		fail_exit("luo_create_session failed");
 
 	iommufd = open_iommufd();
-	memfd = create_sealed_memfd(SZ_1M);
+	memfd = create_sealed_memfd(SZ_2M);
 	cdev_fd = open_cdev(device_cdev_path);
 
-	setup_iommufd(iommufd, memfd, cdev_fd);
+	ioas_id = setup_iommufd(iommufd, memfd, cdev_fd);
 
 	/* Cannot preserve cdev without iommufd */
 	if (!luo_session_preserve_fd(session, cdev_fd, CDEV_TOKEN))
@@ -174,7 +187,19 @@ static void before_kexec(int luo_fd)
 	if (!luo_session_preserve_fd(session, iommufd, IOMMUFD_TOKEN))
 		fail_exit("Preserving iommufd without memfd should fail");
 
+	if (fallocate(memfd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
+		      SZ_1M, SZ_1M))
+		fail_exit("fallocate punch hole failed");
+
 	test_luo_session_preserve_fd(session, memfd, MEMFD_TOKEN);
+
+	/* Cannot preserve iommufd when mapped memfd pages have a hole punched. */
+	if (!luo_session_preserve_fd(session, iommufd, IOMMUFD_TOKEN))
+		fail_exit("Preserving iommufd with hole-punched pages should fail");
+
+	unmap.ioas_id = ioas_id;
+	test_ioctl(iommufd, IOMMU_IOAS_UNMAP, &unmap);
+
 	test_luo_session_preserve_fd(session, iommufd, IOMMUFD_TOKEN);
 	test_luo_session_preserve_fd(session, cdev_fd, CDEV_TOKEN);
 
