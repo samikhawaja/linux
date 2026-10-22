@@ -873,6 +873,10 @@ iommufd_device_do_replace(struct iommufd_device *idev, ioasid_t pasid,
 	int rc;
 
 	mutex_lock(&igroup->lock);
+	if (iommufd_device_is_preserved(idev)) {
+		rc = -EBUSY;
+		goto err_unlock;
+	}
 
 	attach = xa_load(&igroup->pasid_attach, pasid);
 	if (!attach) {
@@ -1759,8 +1763,7 @@ static bool _iommufd_device_has_pasid_attachments(struct iommufd_device *idev)
 	struct iommufd_group *igroup = idev->igroup;
 	unsigned long start = IOMMU_NO_PASID;
 
-	if (xa_find_after(&igroup->pasid_attach,
-			  &start, UINT_MAX, XA_PRESENT))
+	if (xa_find_after(&igroup->pasid_attach, &start, UINT_MAX, XA_PRESENT))
 		return true;
 
 	return false;
