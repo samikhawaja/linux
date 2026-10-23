@@ -1071,6 +1071,9 @@ static int __restore_tables(struct pt_range *range, void *arg,
 	struct pt_state pts = pt_init(range, level, table);
 	int ret;
 
+	if (!pt_can_have_table(&pts))
+		return 0;
+
 	for_each_pt_level_entry(&pts) {
 		if (pts.type == PT_ENTRY_TABLE) {
 			iommu_restore_pages(virt_to_phys(pts.table_lower));
