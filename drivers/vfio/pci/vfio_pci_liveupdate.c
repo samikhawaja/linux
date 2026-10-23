@@ -35,7 +35,13 @@
  *    preserved, so there is no way for the file to be destroyed or the device
  *    to be unbound from the vfio-pci driver while it is preserved.
  *
- * Retrieving the file after kexec is not yet supported.
+ * After kexec, the preserved VFIO device file can be retrieved from the session
+ * just like any other preserved file::
+ *
+ *   ioctl(session_fd, LIVEUPDATE_SESSION_RETRIEVE_FD, &arg);
+ *   device_fd = arg.fd;
+ *   ...
+ *   ioctl(session_fd, LIVEUPDATE_SESSION_FINISH, ...);
  *
  * Restrictions
  * ============
@@ -97,6 +103,36 @@
  * the ``unfreeze()`` callback restores the physical INTx mask and clears the
  * frozen state, leaving the existing file descriptor immediately usable again.
  *
+ * Retrieval and Finish Behavior After Kexec
+ * =========================================
+ *
+ * After kexec, userspace must ensure the preserved PCI device is bound to
+ * ``vfio-pci`` in noiommu mode before invoking
+ * ``LIVEUPDATE_SESSION_RETRIEVE_FD`` (for example, via ``vfio-pci.ids=...`` on
+ * the kernel command line). A failed ``LIVEUPDATE_SESSION_RETRIEVE_FD`` call is
+ * cached permanently by LUO for that file.
+ *
+ * ``LIVEUPDATE_SESSION_RETRIEVE_FD`` validates the handed-over serialized state
+ * and returns a new unbound VFIO cdev file descriptor. The device is claimed on
+ * the first ``VFIO_DEVICE_BIND_IOMMUFD`` on that file descriptor.
+ *
+ * ``LIVEUPDATE_SESSION_FINISH`` (or closing a retrieved session file
+ * descriptor) always completes:
+ *
+ *  * If the device was retrieved and claimed via ``VFIO_DEVICE_BIND_IOMMUFD``,
+ *    ``finish()`` simply completes its Live Update participation.
+ *  * If the device was not claimed (never retrieved, ``retrieve()`` failed, or
+ *    retrieved but never bound via ``VFIO_DEVICE_BIND_IOMMUFD``), ``finish()``
+ *    logs one ``pci_warn()`` naming the device, clears ``PCI_COMMAND_MASTER``,
+ *    resets the function and restores the initial PCI saved state just as
+ *    closing the device would, and finishes its Live Update participation so
+ *    the device can be opened normally afterwards. If ``finish()`` cannot
+ *    reset a device that has a function reset, for example because it cannot
+ *    take the device lock while the device is being unbound from
+ *    ``vfio-pci``, it still clears ``PCI_COMMAND_MASTER``, and the function
+ *    reset is retried when the device is unbound, unless the device is opened
+ *    (which resets it) before that.
+ *
  * DMA Memory Ordering Contract
  * ============================
  *
@@ -110,8 +146,9 @@
  *    preserving the VFIO device. LUO finishes files within a session in reverse
  *    preservation order (LIFO), guaranteeing that if the device is not taken
  *    over in the new kernel, VFIO's ``finish()`` callback stops bus mastering
- *    and resets the device before the ``memfd``'s ``finish()`` callback releases
- *    its folios. Cross-session ordering is the responsibility of userspace.
+ *    before the ``memfd``'s ``finish()`` callback releases its folios. It
+ *    normally resets the device at that point too (see above for when it
+ *    cannot). Cross-session ordering is the responsibility of userspace.
  *
  *  * After retrieving a preserved ``memfd`` in the new kernel, its folios are
  *    ordinary unpinned shmem page cache until pinned again; userspace must keep
@@ -124,6 +161,7 @@
 
 #include <linux/cleanup.h>
 #include <linux/errno.h>
+#include <linux/file.h>
 #include <linux/kexec_handover.h>
 #include <linux/kho/abi/vfio_pci.h>
 #include <linux/liveupdate.h>
@@ -131,6 +169,7 @@
 #include <linux/overflow.h>
 #include <linux/pci.h>
 #include <linux/pci_liveupdate.h>
+#include <linux/slab.h>
 #include <linux/string.h>
 #include <linux/vfio.h>
 
@@ -327,13 +366,308 @@ static void vfio_pci_liveupdate_unfreeze(struct liveupdate_file_op_args *args)
 	smp_store_release(&vdev->liveupdate_frozen, false);
 }
 
+static int vfio_pci_liveupdate_validate_ser(const struct vfio_pci_core_device_ser *ser)
+{
+	size_t expected;
+
+	if (ser->reserved)
+		return -EINVAL;
+
+	if (ser->flags & ~VFIO_PCI_SER_KNOWN_FLAGS)
+		return -EOPNOTSUPP;
+
+	if (ser->cfg_size != PCI_CFG_SPACE_SIZE &&
+	    ser->cfg_size != PCI_CFG_SPACE_EXP_SIZE)
+		return -EINVAL;
+
+	expected = size_add(sizeof(*ser),
+			    size_add(size_mul(2, ser->cfg_size),
+				     ser->saved_state_size));
+	if (expected != ser->size)
+		return -EINVAL;
+
+	return 0;
+}
+
+static struct pci_saved_state *
+vfio_pci_liveupdate_parse_saved_state(struct pci_dev *pdev,
+				      const struct vfio_pci_core_device_ser *ser)
+{
+	const void *blob;
+
+	if (!ser->saved_state_size)
+		return NULL;
+
+	blob = ser->data + 2 * (size_t)ser->cfg_size;
+	return pci_liveupdate_deserialize_saved_state(pdev, blob,
+						      ser->saved_state_size);
+}
+
+static int match_device(struct device *dev, const void *arg)
+{
+	struct vfio_device *device = container_of(dev, struct vfio_device, device);
+	const struct vfio_pci_core_device_ser *ser = arg;
+	struct pci_dev *pdev;
+
+	if (device->ops != &vfio_pci_ops)
+		return false;
+
+	pdev = dev_is_pci(device->dev) ? to_pci_dev(device->dev) : NULL;
+	if (!pdev)
+		return false;
+
+	return ser->bdf == pci_dev_id(pdev) &&
+	       ser->domain == pci_domain_nr(pdev->bus);
+}
+
+/*
+ * vfio-pci makes the vfio device visible before its probe completes, and the
+ * probe runs under the device lock. Look the device up with that lock held, so
+ * that a device found here has completed its probe, and the reset done by
+ * finish() does not contend with the probe for that lock. Return the device
+ * with a registration reference held.
+ */
+static struct vfio_device *
+vfio_pci_liveupdate_find_probed(const struct vfio_pci_core_device_ser *ser)
+{
+	struct vfio_device *device;
+	struct pci_dev *pdev;
+
+	pdev = pci_get_domain_bus_and_slot(ser->domain, PCI_BUS_NUM(ser->bdf),
+					   ser->bdf & 0xff);
+	if (!pdev)
+		return NULL;
+
+	device_lock(&pdev->dev);
+	device = vfio_find_device(ser, match_device);
+	device_unlock(&pdev->dev);
+	pci_dev_put(pdev);
+	return device;
+}
+
+static int
+vfio_pci_liveupdate_attach_incoming(struct vfio_pci_core_device *vdev,
+				    struct vfio_pci_liveupdate_incoming *in)
+{
+	guard(mutex)(&vdev->vdev.dev_set->lock);
+
+	if (vdev->liveupdate_incoming || vdev->liveupdate_claimed ||
+	    !pci_liveupdate_is_incoming(vdev->pdev))
+		return -EBUSY;
+
+	vdev->liveupdate_incoming = in;
+	return 0;
+}
+
 static int vfio_pci_liveupdate_retrieve(struct liveupdate_file_op_args *args)
 {
-	return -EOPNOTSUPP;
+	struct pci_saved_state *saved_state = NULL;
+	const struct vfio_pci_core_device_ser *ser;
+	struct vfio_pci_liveupdate_incoming *in;
+	struct vfio_pci_core_device *vdev;
+	struct vfio_device *device;
+	struct pci_dev *pdev;
+	struct file *file;
+	size_t in_size;
+	int ret;
+
+	if (!args->serialized_data)
+		return -EINVAL;
+
+	ser = phys_to_virt(args->serialized_data);
+	ret = vfio_pci_liveupdate_validate_ser(ser);
+	if (ret)
+		return ret;
+
+	device = vfio_pci_liveupdate_find_probed(ser);
+	if (!device)
+		return -ENODEV;
+
+	vdev = container_of(device, struct vfio_pci_core_device, vdev);
+	pdev = vdev->pdev;
+
+	if (!vfio_device_is_noiommu(device)) {
+		ret = -EOPNOTSUPP;
+		goto out_put_dev;
+	}
+
+	if (!pci_liveupdate_is_incoming(pdev) ||
+	    ser->cfg_size != pdev->cfg_size) {
+		ret = -EINVAL;
+		goto out_put_dev;
+	}
+
+	if (ser->saved_state_size) {
+		saved_state = vfio_pci_liveupdate_parse_saved_state(pdev, ser);
+		if (IS_ERR(saved_state)) {
+			ret = PTR_ERR(saved_state);
+			goto out_put_dev;
+		}
+	}
+
+	in_size = struct_size(in, data, size_mul(2, ser->cfg_size));
+	in = kzalloc(in_size, GFP_KERNEL);
+	if (!in) {
+		ret = -ENOMEM;
+		goto out_free_saved;
+	}
+
+	in->saved_state = saved_state;
+	in->reset_works = !!(ser->flags & VFIO_PCI_SER_RESET_WORKS);
+	in->cfg_size = ser->cfg_size;
+	memcpy(in->data, ser->data, 2 * (size_t)ser->cfg_size);
+
+	file = vfio_device_liveupdate_cdev_open(device);
+	if (IS_ERR(file)) {
+		ret = PTR_ERR(file);
+		goto out_free_in;
+	}
+
+	ret = vfio_pci_liveupdate_attach_incoming(vdev, in);
+	if (ret)
+		goto out_fput;
+
+	args->file = file;
+	vfio_device_put_registration(device);
+	return 0;
+
+out_fput:
+	fput(file);
+out_free_in:
+	kfree(in);
+out_free_saved:
+	kfree(saved_state);
+out_put_dev:
+	vfio_device_put_registration(device);
+	return ret;
+}
+
+static void vfio_pci_liveupdate_finish_vdev(struct vfio_pci_core_device *vdev,
+					    const struct vfio_pci_core_device_ser *ser,
+					    const char *reason)
+{
+	struct pci_dev *pdev = vdev->pdev;
+	struct pci_saved_state *saved_state = NULL;
+	bool reset_works = true;
+	bool was_reset;
+
+	scoped_guard(mutex, &vdev->vdev.dev_set->lock) {
+		if (!vdev->liveupdate_claimed &&
+		    pci_liveupdate_is_incoming(pdev)) {
+			if (vdev->liveupdate_incoming) {
+				saved_state = vdev->liveupdate_incoming->saved_state;
+				vdev->liveupdate_incoming->saved_state = NULL;
+				reset_works = vdev->liveupdate_incoming->reset_works;
+			} else if (!vfio_pci_liveupdate_validate_ser(ser) &&
+				   ser->cfg_size == pdev->cfg_size) {
+				reset_works = !!(ser->flags & VFIO_PCI_SER_RESET_WORKS);
+				saved_state = vfio_pci_liveupdate_parse_saved_state(pdev, ser);
+				if (IS_ERR(saved_state))
+					saved_state = NULL;
+			}
+
+			/*
+			 * An unbind of the device waits for the reference held
+			 * by finish() with the device lock held, so the reset
+			 * only tries to take that lock. If the device has a
+			 * function reset but was not reset, e.g. because that
+			 * lock was taken, bus mastering is still cleared, and
+			 * the function reset is retried when the device is
+			 * unbound, unless the device is opened before that. See
+			 * vfio_pci_liveupdate_unregister_dev() and
+			 * vfio_pci_liveupdate_claim_incoming().
+			 */
+			was_reset = vfio_pci_core_liveupdate_reset(vdev,
+								   saved_state,
+								   reset_works,
+								   reason);
+			vdev->liveupdate_reset_pending = reset_works &&
+							 !was_reset;
+		}
+		vfio_pci_liveupdate_free_incoming(vdev);
+	}
+
+	if (pci_liveupdate_is_incoming(pdev))
+		pci_liveupdate_finish(pdev);
+}
+
+/*
+ * Look up the vfio-pci device of a preserved device that was not retrieved,
+ * with the device lock held, like vfio_pci_liveupdate_find_probed(). If it is
+ * bound to vfio-pci, return the vfio-pci device with a registration reference
+ * held, so that the caller finishes it. Otherwise, finish the device here.
+ */
+static struct vfio_device *
+vfio_pci_liveupdate_finish_lookup(const struct vfio_pci_core_device_ser *ser)
+{
+	struct vfio_device *device = NULL;
+	struct pci_dev *pdev, *bridge;
+
+	pdev = pci_get_domain_bus_and_slot(ser->domain, PCI_BUS_NUM(ser->bdf),
+					   ser->bdf & 0xff);
+	if (!pdev)
+		return NULL;
+
+	bridge = pci_upstream_bridge(pdev);
+	if (bridge)
+		pci_dev_lock(bridge);
+	pci_dev_lock(pdev);
+
+	if (pci_liveupdate_is_incoming(pdev)) {
+		if (!pdev->dev.driver) {
+			pci_warn(pdev,
+				 "Resetting device not taken over after Live Update (not bound to vfio-pci)\n");
+			pci_clear_master(pdev);
+			pci_reset_function_locked(pdev);
+			pci_liveupdate_finish(pdev);
+		} else {
+			/*
+			 * A driver is bound and its probe has completed, as it
+			 * runs under the device lock. Holding the lock also
+			 * prevents an unbind until the registration reference
+			 * below is taken.
+			 */
+			device = vfio_find_device(ser, match_device);
+			if (!device) {
+				pci_warn(pdev,
+					 "Device not taken over after Live Update is bound to %s, not resetting it\n",
+					 dev_driver_string(&pdev->dev));
+				pci_liveupdate_finish(pdev);
+			}
+		}
+	}
+
+	pci_dev_unlock(pdev);
+	if (bridge)
+		pci_dev_unlock(bridge);
+	pci_dev_put(pdev);
+	return device;
 }
 
 static void vfio_pci_liveupdate_finish(struct liveupdate_file_op_args *args)
 {
+	struct vfio_pci_core_device_ser *ser = phys_to_virt(args->serialized_data);
+	struct vfio_pci_core_device *vdev;
+	struct vfio_device *device;
+	const char *reason;
+
+	if (args->retrieve_status > 0) {
+		device = vfio_device_from_file(args->file);
+		vdev = container_of(device, struct vfio_pci_core_device, vdev);
+		vfio_pci_liveupdate_finish_vdev(vdev, ser,
+						"retrieved but not opened");
+	} else {
+		reason = args->retrieve_status ? "retrieve failed" : "not retrieved";
+		device = vfio_pci_liveupdate_finish_lookup(ser);
+		if (device) {
+			vdev = container_of(device, struct vfio_pci_core_device,
+					    vdev);
+			vfio_pci_liveupdate_finish_vdev(vdev, ser, reason);
+			vfio_device_put_registration(device);
+		}
+	}
+
+	kho_restore_free(ser);
 }
 
 static const struct liveupdate_file_ops vfio_pci_liveupdate_file_ops = {
