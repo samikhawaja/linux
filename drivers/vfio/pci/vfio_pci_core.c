@@ -370,6 +370,8 @@ int vfio_pci_set_power_state(struct vfio_pci_core_device *vdev, pci_power_t stat
 	return ret;
 }
 
+static void vfio_pci_zap_bars(struct vfio_pci_core_device *vdev);
+
 static int vfio_pci_runtime_pm_entry(struct vfio_pci_core_device *vdev,
 				     struct eventfd_ctx *efdctx)
 {
@@ -377,7 +379,12 @@ static int vfio_pci_runtime_pm_entry(struct vfio_pci_core_device *vdev,
 	 * The vdev power related flags are protected with 'memory_lock'
 	 * semaphore.
 	 */
-	vfio_pci_zap_and_down_write_memory_lock(vdev);
+	down_write(&vdev->memory_lock);
+	if (vfio_pci_dev_is_frozen(vdev)) {
+		up_write(&vdev->memory_lock);
+		return -EIO;
+	}
+	vfio_pci_zap_bars(vdev);
 	vfio_pci_dma_buf_move(vdev, true);
 
 	if (vdev->pm_runtime_engaged) {
@@ -1129,6 +1136,9 @@ int vfio_pci_ioctl_get_region_info(struct vfio_device *core_vdev,
 	struct pci_dev *pdev = vdev->pdev;
 	int i, ret;
 
+	if (vfio_pci_dev_is_frozen(vdev))
+		return -EIO;
+
 	switch (info->index) {
 	case VFIO_PCI_CONFIG_REGION_INDEX:
 		info->offset = VFIO_PCI_INDEX_TO_OFFSET(info->index);
@@ -1296,9 +1306,15 @@ static int vfio_pci_ioctl_set_irqs(struct vfio_pci_core_device *vdev,
 
 	mutex_lock(&vdev->igate);
 
+	if (vfio_pci_dev_is_frozen(vdev)) {
+		ret = -EIO;
+		goto out_unlock;
+	}
+
 	ret = vfio_pci_set_irqs_ioctl(vdev, hdr.flags, hdr.index, hdr.start,
 				      hdr.count, data);
 
+out_unlock:
 	mutex_unlock(&vdev->igate);
 	kfree(data);
 
@@ -1313,7 +1329,12 @@ static int vfio_pci_ioctl_reset(struct vfio_pci_core_device *vdev,
 	if (!vdev->reset_works)
 		return -EINVAL;
 
-	vfio_pci_zap_and_down_write_memory_lock(vdev);
+	down_write(&vdev->memory_lock);
+	if (vfio_pci_dev_is_frozen(vdev)) {
+		up_write(&vdev->memory_lock);
+		return -EIO;
+	}
+	vfio_pci_zap_bars(vdev);
 
 	/*
 	 * This function can be invoked while the power state is non-D0. If
@@ -1552,6 +1573,9 @@ long vfio_pci_core_ioctl(struct vfio_device *core_vdev, unsigned int cmd,
 		container_of(core_vdev, struct vfio_pci_core_device, vdev);
 	void __user *uarg = (void __user *)arg;
 
+	if (vfio_pci_dev_is_frozen(vdev))
+		return -EIO;
+
 	switch (cmd) {
 	case VFIO_DEVICE_GET_INFO:
 		return vfio_pci_ioctl_get_info(vdev, uarg);
@@ -1606,6 +1630,9 @@ int vfio_pci_core_ioctl_feature(struct vfio_device *device, u32 flags,
 	struct vfio_pci_core_device *vdev =
 		container_of(device, struct vfio_pci_core_device, vdev);
 
+	if (vfio_pci_dev_is_frozen(vdev))
+		return -EIO;
+
 	switch (flags & VFIO_DEVICE_FEATURE_MASK) {
 	case VFIO_DEVICE_FEATURE_LOW_POWER_ENTRY:
 		return vfio_pci_core_pm_entry(vdev, flags, arg, argsz);
@@ -1631,6 +1658,9 @@ static ssize_t vfio_pci_rw(struct vfio_pci_core_device *vdev, char __user *buf,
 {
 	unsigned int index = VFIO_PCI_OFFSET_TO_INDEX(*ppos);
 	int ret;
+
+	if (vfio_pci_dev_is_frozen(vdev))
+		return -EIO;
 
 	if (index >= VFIO_PCI_NUM_REGIONS + vdev->num_regions)
 		return -EINVAL;
@@ -1814,6 +1844,9 @@ int vfio_pci_core_mmap(struct vfio_device *core_vdev, struct vm_area_struct *vma
 	unsigned int index;
 	u64 phys_len, req_len, pgoff, req_start;
 	void __iomem *bar_io;
+
+	if (vfio_pci_dev_is_frozen(vdev))
+		return -EIO;
 
 	index = vma->vm_pgoff >> (VFIO_PCI_OFFSET_SHIFT - PAGE_SHIFT);
 
@@ -2373,6 +2406,13 @@ int vfio_pci_core_sriov_configure(struct vfio_pci_core_device *vdev,
 			goto out_del;
 
 		down_write(&vdev->memory_lock);
+		/* A device frozen for Live Update must not change. */
+		if (vfio_pci_dev_is_frozen(vdev)) {
+			up_write(&vdev->memory_lock);
+			pm_runtime_put(&pdev->dev);
+			ret = -EBUSY;
+			goto out_del;
+		}
 		vfio_pci_set_power_state(vdev, PCI_D0);
 		vdev->sriov_active = true;
 		up_write(&vdev->memory_lock);
@@ -2511,6 +2551,11 @@ static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
 
 	list_for_each_entry(vdev, &dev_set->device_list, vdev.dev_set_list) {
 		bool owned;
+
+		if (vfio_pci_dev_is_frozen(vdev)) {
+			ret = -EBUSY;
+			break;
+		}
 
 		/*
 		 * Test whether all the affected devices can be reset by the
