@@ -1814,8 +1814,13 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 	}
 
 	hwpt = attach->hwpt;
-	hwpt_paging = find_hwpt_paging(hwpt);
-	if (!hwpt_paging || !hwpt_paging->liveupdate_preserved) {
+	if (!hwpt_is_paging(hwpt)) {
+		ret = -EOPNOTSUPP;
+		goto out;
+	}
+
+	hwpt_paging = to_hwpt_paging(hwpt);
+	if (!hwpt_paging->liveupdate_preserved) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1866,8 +1871,11 @@ void iommufd_device_unpreserve(struct liveupdate_session *s,
 	}
 
 	hwpt = attach->hwpt;
-	hwpt_paging = find_hwpt_paging(hwpt);
-	if (!hwpt_paging || !hwpt_paging->liveupdate_preserved) {
+	if (WARN(!hwpt_is_paging(hwpt), "Attached HWPT is not a paging HWPT"))
+		goto out;
+
+	hwpt_paging = to_hwpt_paging(hwpt);
+	if (!hwpt_paging->liveupdate_preserved) {
 		WARN(1, "Attached domain is not preserved");
 		goto out;
 	}
