@@ -169,6 +169,40 @@ static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
 	return smp_load_acquire(&vdev->liveupdate_frozen);
 }
 
+static inline bool vfio_pci_dev_is_kept_running(struct vfio_pci_core_device *vdev)
+{
+	return vdev->liveupdate_kept_running;
+}
+
+static inline void vfio_pci_liveupdate_init_dev(struct vfio_pci_core_device *vdev)
+{
+	struct pci_dev *pdev = to_pci_dev(vdev->vdev.dev);
+
+	if (pci_liveupdate_is_incoming(pdev)) {
+		vdev->disable_idle_d3 = true;
+		vdev->liveupdate_kept_running = true;
+	}
+}
+
+/*
+ * Called by probe once the device is registered, with the device lock held.
+ * retrieve() and finish() look the device up with that lock held, see
+ * vfio_pci_liveupdate_find_probed(), so they see the result of this check.
+ */
+static inline void
+vfio_pci_liveupdate_check_noiommu(struct vfio_pci_core_device *vdev)
+{
+	guard(mutex)(&vdev->vdev.dev_set->lock);
+
+	if (vdev->liveupdate_kept_running &&
+	    !vfio_device_is_noiommu(&vdev->vdev)) {
+		pci_warn(vdev->pdev,
+			 "Stopping device kept running across Live Update: not in noiommu mode\n");
+		pci_clear_master(vdev->pdev);
+		vdev->liveupdate_stopped_early = true;
+	}
+}
+
 static inline void
 vfio_pci_liveupdate_free_incoming(struct vfio_pci_core_device *vdev)
 {
@@ -196,7 +230,7 @@ vfio_pci_liveupdate_claim_incoming(struct vfio_pci_core_device *vdev)
 		return;
 
 	vfio_pci_liveupdate_free_incoming(vdev);
-	vdev->liveupdate_claimed = true;
+	vdev->liveupdate_kept_running = false;
 }
 
 static inline void
@@ -206,11 +240,17 @@ vfio_pci_liveupdate_unregister_dev(struct vfio_pci_core_device *vdev)
 
 	scoped_guard(mutex, &vdev->vdev.dev_set->lock) {
 		/*
-		 * Complete a reset that finish() could not do, see
-		 * vfio_pci_liveupdate_finish_vdev().
+		 * Reset a device unbound before finish(), or whose reset
+		 * finish() could not do, see vfio_pci_liveupdate_finish_vdev().
 		 */
-		if (vdev->liveupdate_reset_pending) {
+		if (vdev->liveupdate_kept_running ||
+		    vdev->liveupdate_reset_pending) {
+			if (vdev->liveupdate_kept_running &&
+			    !vdev->liveupdate_stopped_early)
+				pci_warn(pdev,
+					 "Resetting device not taken over after Live Update (vfio-pci unbound)\n");
 			vfio_pci_core_liveupdate_reset_locked(vdev);
+			vdev->liveupdate_kept_running = false;
 			vdev->liveupdate_reset_pending = false;
 		}
 		vfio_pci_liveupdate_free_incoming(vdev);
@@ -232,6 +272,20 @@ static inline void vfio_pci_liveupdate_cleanup(void)
 static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
 {
 	return false;
+}
+
+static inline bool vfio_pci_dev_is_kept_running(struct vfio_pci_core_device *vdev)
+{
+	return false;
+}
+
+static inline void vfio_pci_liveupdate_init_dev(struct vfio_pci_core_device *vdev)
+{
+}
+
+static inline void
+vfio_pci_liveupdate_check_noiommu(struct vfio_pci_core_device *vdev)
+{
 }
 
 static inline void

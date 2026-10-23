@@ -768,6 +768,15 @@ bool vfio_pci_core_liveupdate_reset(struct vfio_pci_core_device *vdev,
 	vdev->reset_works = reset_works;
 	vfio_pci_core_try_reset(vdev);
 
+	/*
+	 * Like vfio_pci_core_disable(), try a bus or slot reset for the devices
+	 * in the set that still need one, e.g. this device if it has no usable
+	 * function reset, or others whose reset was deferred while this device
+	 * was kept running. This device is not open, so none in the set may be.
+	 */
+	if (!vfio_device_set_open_count(vdev->vdev.dev_set))
+		vfio_pci_dev_set_try_reset(vdev->vdev.dev_set);
+
 	return !vdev->needs_reset;
 }
 EXPORT_SYMBOL_GPL(vfio_pci_core_liveupdate_reset);
@@ -2399,6 +2408,8 @@ int vfio_pci_core_register_device(struct vfio_pci_core_device *vdev)
 	if (ret)
 		goto out_power;
 
+	vfio_pci_liveupdate_check_noiommu(vdev);
+
 	vfio_pci_core_debugfs_init(vdev);
 
 	return 0;
@@ -2642,7 +2653,8 @@ static int vfio_pci_dev_set_hot_reset(struct vfio_device_set *dev_set,
 	list_for_each_entry(vdev, &dev_set->device_list, vdev.dev_set_list) {
 		bool owned;
 
-		if (vfio_pci_dev_is_frozen(vdev)) {
+		if (vfio_pci_dev_is_frozen(vdev) ||
+		    vfio_pci_dev_is_kept_running(vdev)) {
 			ret = -EBUSY;
 			break;
 		}
@@ -2744,8 +2756,11 @@ static bool vfio_pci_dev_set_needs_reset(struct vfio_device_set *dev_set)
 	if (vfio_device_set_open_count(dev_set) > 1)
 		return false;
 
-	list_for_each_entry(cur, &dev_set->device_list, vdev.dev_set_list)
+	list_for_each_entry(cur, &dev_set->device_list, vdev.dev_set_list) {
+		if (vfio_pci_dev_is_kept_running(cur))
+			return false;
 		needs_reset |= cur->needs_reset;
+	}
 	return needs_reset;
 }
 

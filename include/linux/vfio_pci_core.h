@@ -152,7 +152,8 @@ struct vfio_pci_core_device {
 #ifdef CONFIG_VFIO_PCI_LIVEUPDATE
 	bool			liveupdate_frozen;
 	bool			liveupdate_intx_disabled;
-	bool			liveupdate_claimed;
+	bool			liveupdate_kept_running;
+	bool			liveupdate_stopped_early;
 	bool			liveupdate_reset_pending;
 	struct vfio_pci_liveupdate_incoming *liveupdate_incoming;
 #endif
