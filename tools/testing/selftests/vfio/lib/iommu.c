@@ -22,7 +22,10 @@
 
 const char *default_iommu_mode = MODE_IOMMUFD;
 
-/* Reminder: Keep in sync with FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES(). */
+/*
+ * Reminder: Keep in sync with FIXTURE_VARIANT_ADD_ALL_IOMMU_MODES(), which
+ * deliberately leaves out the noiommu modes.
+ */
 static const struct iommu_mode iommu_modes[] = {
 	{
 		.name = MODE_VFIO_TYPE1_IOMMU,
@@ -46,6 +49,10 @@ static const struct iommu_mode iommu_modes[] = {
 	},
 	{
 		.name = MODE_IOMMUFD,
+	},
+	{
+		.name = MODE_IOMMUFD_NOIOMMU,
+		.noiommu = true,
 	},
 };
 
