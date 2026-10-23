@@ -457,7 +457,7 @@ vfio_pci_liveupdate_attach_incoming(struct vfio_pci_core_device *vdev,
 {
 	guard(mutex)(&vdev->vdev.dev_set->lock);
 
-	if (vdev->liveupdate_incoming || vdev->liveupdate_claimed ||
+	if (vdev->liveupdate_incoming || !vdev->liveupdate_kept_running ||
 	    !pci_liveupdate_is_incoming(vdev->pdev))
 		return -EBUSY;
 
@@ -558,8 +558,7 @@ static void vfio_pci_liveupdate_finish_vdev(struct vfio_pci_core_device *vdev,
 	bool was_reset;
 
 	scoped_guard(mutex, &vdev->vdev.dev_set->lock) {
-		if (!vdev->liveupdate_claimed &&
-		    pci_liveupdate_is_incoming(pdev)) {
+		if (vdev->liveupdate_kept_running) {
 			if (vdev->liveupdate_incoming) {
 				saved_state = vdev->liveupdate_incoming->saved_state;
 				vdev->liveupdate_incoming->saved_state = NULL;
@@ -571,6 +570,17 @@ static void vfio_pci_liveupdate_finish_vdev(struct vfio_pci_core_device *vdev,
 				if (IS_ERR(saved_state))
 					saved_state = NULL;
 			}
+
+			/*
+			 * The device is stopped below, so stop shielding it from
+			 * the dev_set resets, including the fallback done by
+			 * vfio_pci_core_liveupdate_reset().
+			 */
+			vdev->liveupdate_kept_running = false;
+
+			/* A device stopped early was logged when it was stopped. */
+			if (vdev->liveupdate_stopped_early)
+				reason = NULL;
 
 			/*
 			 * An unbind of the device waits for the reference held
