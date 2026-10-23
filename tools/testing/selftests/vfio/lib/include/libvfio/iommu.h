@@ -65,6 +65,32 @@ static inline void iommu_unmap_all(struct iommu *iommu)
 int __iommu_hva2iova(struct iommu *iommu, void *vaddr, iova_t *iova);
 iova_t iommu_hva2iova(struct iommu *iommu, void *vaddr);
 
+/*
+ * Look up the physical address @iova maps to in the noiommu IOAS of @iommu
+ * (IOMMU_IOAS_NOIOMMU_GET_PA, requires CAP_SYS_RAWIO). On success, *@length is
+ * the number of physically contiguous bytes from *@pa, at most @max_length.
+ */
+int __iommu_noiommu_get_pa(struct iommu *iommu, iova_t iova, u64 max_length,
+			   u64 *pa, u64 *length);
+
+/*
+ * Map @region->size bytes at @region->vaddr at IOVA == PA, and set
+ * @region->iova to that PA. Devices in noiommu mode use the addresses that
+ * drivers program into them, i.e. to_iova(), as physical addresses, which such
+ * a mapping makes right.
+ *
+ * The buffer must be physically contiguous (e.g. a hugepage or a THP), and a
+ * noiommu device must be attached to @iommu already. The memory stays pinned,
+ * and so at the same physical address, until iommu_unmap(@region), which must
+ * not be called before the device stopped accessing it.
+ */
+int __iommu_map_identity(struct iommu *iommu, struct dma_region *region);
+
+static inline void iommu_map_identity(struct iommu *iommu, struct dma_region *region)
+{
+	VFIO_ASSERT_EQ(__iommu_map_identity(iommu, region), 0);
+}
+
 struct iommu_iova_range *iommu_iova_ranges(struct iommu *iommu, u32 *nranges);
 
 #define MODE_VFIO_TYPE1_IOMMU "vfio_type1_iommu"
