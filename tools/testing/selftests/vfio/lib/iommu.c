@@ -11,6 +11,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
+#include <linux/bits.h>
 #include <linux/limits.h>
 #include <linux/mman.h>
 #include <linux/types.h>
@@ -242,6 +243,66 @@ int __iommu_unmap_all(struct iommu *iommu, u64 *unmapped)
 		list_del_init(&curr->link);
 
 	return 0;
+}
+
+/*
+ * The noiommu IOAS page table translates to physical addresses of at most 52
+ * bits (drivers/iommu/iommufd/hwpt_noiommu.c), so a mapping at or above this
+ * IOVA never overlaps one at IOVA == PA.
+ */
+#define NOIOMMU_SCRATCH_IOVA	BIT_ULL(52)
+
+int __iommu_noiommu_get_pa(struct iommu *iommu, iova_t iova, u64 max_length,
+			   u64 *pa, u64 *length)
+{
+	struct iommu_ioas_noiommu_get_pa args = {
+		.size = sizeof(args),
+		.ioas_id = iommu->ioas_id,
+		.iova = iova,
+		.length = max_length,
+	};
+
+	if (!iommu->iommufd || !iommu->mode->noiommu)
+		return -EOPNOTSUPP;
+
+	if (ioctl(iommu->iommufd, IOMMU_IOAS_NOIOMMU_GET_PA, &args))
+		return -errno;
+
+	*pa = args.out_phys;
+	*length = args.length;
+	return 0;
+}
+
+int __iommu_map_identity(struct iommu *iommu, struct dma_region *region)
+{
+	struct dma_region scratch = {
+		.vaddr = region->vaddr,
+		.iova = NOIOMMU_SCRATCH_IOVA,
+		.size = region->size,
+	};
+	u64 pa, length;
+	int ret;
+
+	/* Pin the buffer with a scratch mapping to look up its physical address. */
+	ret = __iommu_map(iommu, &scratch);
+	if (ret)
+		return ret;
+
+	ret = __iommu_noiommu_get_pa(iommu, scratch.iova, scratch.size, &pa, &length);
+	if (!ret && length != region->size)
+		ret = -EINVAL;	/* Not physically contiguous. */
+
+	/*
+	 * Map it at IOVA == PA before dropping the scratch mapping, so that it
+	 * stays pinned, and hence at the same physical address, throughout.
+	 */
+	if (!ret) {
+		region->iova = pa;
+		ret = __iommu_map(iommu, region);
+	}
+
+	VFIO_ASSERT_EQ(__iommu_unmap(iommu, &scratch, NULL), 0);
+	return ret;
 }
 
 static struct vfio_info_cap_header *next_cap_hdr(void *buf, u32 bufsz,
