@@ -150,6 +150,15 @@ static inline void vfio_pci_dma_buf_move(struct vfio_pci_core_device *vdev,
 }
 #endif
 
+struct vfio_pci_liveupdate_incoming {
+	struct pci_saved_state *saved_state;
+	bool reset_works;
+	u16 cfg_size;
+	u8 data[];
+};
+
+void vfio_pci_core_liveupdate_reset_locked(struct vfio_pci_core_device *vdev);
+
 #ifdef CONFIG_VFIO_PCI_LIVEUPDATE
 int __init vfio_pci_liveupdate_init(void);
 void vfio_pci_liveupdate_cleanup(void);
@@ -158,6 +167,57 @@ static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
 {
 	/* Written in VFIO PCI Liveupdate during freeze()/unfreeze() */
 	return smp_load_acquire(&vdev->liveupdate_frozen);
+}
+
+static inline void
+vfio_pci_liveupdate_free_incoming(struct vfio_pci_core_device *vdev)
+{
+	struct vfio_pci_liveupdate_incoming *in = vdev->liveupdate_incoming;
+
+	if (!in)
+		return;
+
+	kfree(in->saved_state);
+	kfree(in);
+	vdev->liveupdate_incoming = NULL;
+}
+
+static inline void
+vfio_pci_liveupdate_claim_incoming(struct vfio_pci_core_device *vdev)
+{
+	/*
+	 * A reset that finish() left for unbind is not needed once the device
+	 * is opened after finish(): the open resets the device if it can, and
+	 * so does the close.
+	 */
+	vdev->liveupdate_reset_pending = false;
+
+	if (!vdev->liveupdate_incoming)
+		return;
+
+	vfio_pci_liveupdate_free_incoming(vdev);
+	vdev->liveupdate_claimed = true;
+}
+
+static inline void
+vfio_pci_liveupdate_unregister_dev(struct vfio_pci_core_device *vdev)
+{
+	struct pci_dev *pdev = vdev->pdev;
+
+	scoped_guard(mutex, &vdev->vdev.dev_set->lock) {
+		/*
+		 * Complete a reset that finish() could not do, see
+		 * vfio_pci_liveupdate_finish_vdev().
+		 */
+		if (vdev->liveupdate_reset_pending) {
+			vfio_pci_core_liveupdate_reset_locked(vdev);
+			vdev->liveupdate_reset_pending = false;
+		}
+		vfio_pci_liveupdate_free_incoming(vdev);
+	}
+
+	if (pci_liveupdate_is_incoming(pdev))
+		pci_liveupdate_finish(pdev);
 }
 #else
 static inline int vfio_pci_liveupdate_init(void)
@@ -172,6 +232,21 @@ static inline void vfio_pci_liveupdate_cleanup(void)
 static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
 {
 	return false;
+}
+
+static inline void
+vfio_pci_liveupdate_free_incoming(struct vfio_pci_core_device *vdev)
+{
+}
+
+static inline void
+vfio_pci_liveupdate_claim_incoming(struct vfio_pci_core_device *vdev)
+{
+}
+
+static inline void
+vfio_pci_liveupdate_unregister_dev(struct vfio_pci_core_device *vdev)
+{
 }
 #endif /* CONFIG_VFIO_PCI_LIVEUPDATE */
 

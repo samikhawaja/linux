@@ -671,6 +671,8 @@ int vfio_pci_core_enable(struct vfio_pci_core_device *vdev)
 
 	vfio_pci_core_map_bars(vdev);
 
+	vfio_pci_liveupdate_claim_incoming(vdev);
+
 	return 0;
 
 out_free_zdev:
@@ -737,6 +739,63 @@ static void vfio_pci_core_try_reset(struct vfio_pci_core_device *vdev)
 
 out_restore_state:
 	pci_restore_state(pdev);
+}
+
+/*
+ * Reset a device that was kept running across a Live Update but not taken over,
+ * from the Live Update finish() of the device. Return true if the device was
+ * reset, false if it could not be reset, e.g. because its device lock could
+ * not be taken.
+ */
+bool vfio_pci_core_liveupdate_reset(struct vfio_pci_core_device *vdev,
+				    struct pci_saved_state *saved_state,
+				    bool reset_works, const char *reason)
+{
+	struct pci_dev *pdev = vdev->pdev;
+
+	lockdep_assert_held(&vdev->vdev.dev_set->lock);
+
+	if (reason)
+		pci_warn(pdev,
+			 "Resetting device not taken over after Live Update (%s)\n",
+			 reason);
+
+	pci_clear_master(pdev);
+	if (!saved_state)
+		pci_save_state(pdev);
+	kfree(vdev->pci_saved_state);
+	vdev->pci_saved_state = saved_state;
+	vdev->reset_works = reset_works;
+	vfio_pci_core_try_reset(vdev);
+
+	return !vdev->needs_reset;
+}
+EXPORT_SYMBOL_GPL(vfio_pci_core_liveupdate_reset);
+
+/*
+ * Reset a device preserved across a Live Update from its remove() path, where
+ * the driver core holds the device lock. Save and restore the config space
+ * around the reset like vfio_pci_core_try_reset(), and block user config
+ * access while doing so. Like pci_reset_function_locked(), do not take the
+ * upstream bridge lock: remove() cannot wait for it without inverting the
+ * bridge -> device lock order, and the Live Update finish() of an unbound
+ * device holds it while it waits for the device lock held here.
+ */
+void vfio_pci_core_liveupdate_reset_locked(struct vfio_pci_core_device *vdev)
+{
+	struct pci_dev *pdev = vdev->pdev;
+
+	device_lock_assert(&pdev->dev);
+	lockdep_assert_held(&vdev->vdev.dev_set->lock);
+
+	pci_clear_master(pdev);
+	pci_cfg_access_lock(pdev);
+	pci_save_state(pdev);
+	pci_write_config_word(pdev, PCI_COMMAND, PCI_COMMAND_INTX_DISABLE);
+	if (!__pci_reset_function_locked(pdev))
+		vdev->needs_reset = false;
+	pci_restore_state(pdev);
+	pci_cfg_access_unlock(pdev);
 }
 
 void vfio_pci_core_disable(struct vfio_pci_core_device *vdev)
@@ -2361,6 +2420,12 @@ void vfio_pci_core_unregister_device(struct vfio_pci_core_device *vdev)
 	vfio_pci_core_sriov_configure(vdev, 0);
 
 	vfio_unregister_group_dev(&vdev->vdev);
+
+	/*
+	 * Must follow vfio_unregister_group_dev(), which waits for the
+	 * references a Live Update finish() of the device may hold.
+	 */
+	vfio_pci_liveupdate_unregister_dev(vdev);
 
 	vfio_pci_vf_uninit(vdev);
 	vfio_pci_vga_uninit(vdev);

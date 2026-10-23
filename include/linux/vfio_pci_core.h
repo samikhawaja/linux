@@ -152,6 +152,9 @@ struct vfio_pci_core_device {
 #ifdef CONFIG_VFIO_PCI_LIVEUPDATE
 	bool			liveupdate_frozen;
 	bool			liveupdate_intx_disabled;
+	bool			liveupdate_claimed;
+	bool			liveupdate_reset_pending;
+	struct vfio_pci_liveupdate_incoming *liveupdate_incoming;
 #endif
 };
 
@@ -197,6 +200,9 @@ int vfio_pci_core_match_token_uuid(struct vfio_device *core_vdev,
 int vfio_pci_core_enable(struct vfio_pci_core_device *vdev);
 void vfio_pci_core_disable(struct vfio_pci_core_device *vdev);
 void vfio_pci_core_finish_enable(struct vfio_pci_core_device *vdev);
+bool vfio_pci_core_liveupdate_reset(struct vfio_pci_core_device *vdev,
+				    struct pci_saved_state *saved_state,
+				    bool reset_works, const char *reason);
 pci_ers_result_t vfio_pci_core_aer_err_detected(struct pci_dev *pdev,
 						pci_channel_state_t state);
 ssize_t vfio_pci_core_do_io_rw(struct vfio_pci_core_device *vdev, bool test_mem,
