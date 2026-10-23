@@ -40,7 +40,8 @@ static void vfio_check_driver_op(struct vfio_pci_driver *driver, void *op,
 {
 	VFIO_ASSERT_NOT_NULL(driver->ops);
 	VFIO_ASSERT_NOT_NULL(op, "Driver has no %s()\n", op_name);
-	VFIO_ASSERT_EQ(driver->initialized, op != driver->ops->init);
+	VFIO_ASSERT_EQ(driver->initialized,
+		       op != driver->ops->init && op != driver->ops->attach);
 	VFIO_ASSERT_EQ(driver->memcpy_in_progress, op == driver->ops->memcpy_wait);
 }
 
@@ -59,6 +60,25 @@ void vfio_pci_driver_init(struct vfio_pci_device *device)
 	driver->ops->init(device);
 
 	driver->initialized = true;
+}
+
+/*
+ * Take over @device as vfio_pci_driver_init() left it in another process, e.g.
+ * before a Live Update. Pass @memcpy_in_progress if memcpy operations were
+ * started there, to be able to wait for them with vfio_pci_driver_memcpy_wait().
+ */
+void vfio_pci_driver_attach(struct vfio_pci_device *device,
+			    bool memcpy_in_progress)
+{
+	struct vfio_pci_driver *driver = &device->driver;
+
+	VFIO_ASSERT_NOT_NULL(driver->region.vaddr);
+	VFIO_CHECK_DRIVER_OP(driver, attach);
+
+	driver->ops->attach(device);
+
+	driver->initialized = true;
+	driver->memcpy_in_progress = memcpy_in_progress;
 }
 
 void vfio_pci_driver_remove(struct vfio_pci_device *device)

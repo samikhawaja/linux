@@ -29,6 +29,21 @@ struct vfio_pci_driver_ops {
 	void (*remove)(struct vfio_pci_device *device);
 
 	/**
+	 * attach() - Adopt @device as init() and memcpy_start() left it, e.g.
+	 * in another process before a Live Update, without resetting or
+	 * reprogramming it. Memcpy operations started then keep going and can be
+	 * waited for with memcpy_wait(). Optional.
+	 *
+	 * Only sets up what is specific to the calling process (pointers into the
+	 * BARs kept in the driver state, MSI-X) and the driver limits.
+	 *
+	 * Must be called after device->driver.region, and any memory the device
+	 * was told to DMA to, have been mapped at the same IOVAs as when init()
+	 * and memcpy_start() were called.
+	 */
+	void (*attach)(struct vfio_pci_device *device);
+
+	/**
 	 * memcpy_start() - Kick off @count repeated memcpy operations from
 	 * [@src, @src + @size) to [@dst, @dst + @size).
 	 *
@@ -85,6 +100,8 @@ struct vfio_pci_driver {
 
 void vfio_pci_driver_probe(struct vfio_pci_device *device);
 void vfio_pci_driver_init(struct vfio_pci_device *device);
+void vfio_pci_driver_attach(struct vfio_pci_device *device,
+			    bool memcpy_in_progress);
 void vfio_pci_driver_remove(struct vfio_pci_device *device);
 int vfio_pci_driver_memcpy(struct vfio_pci_device *device,
 			   iova_t src, iova_t dst, u64 size);

@@ -215,6 +215,16 @@ static void dsa_register_cache_init(struct vfio_pci_device *device)
 	dsa->max_copies_per_batch = min(dsa->max_copies_per_batch, ARRAY_SIZE(dsa->copy));
 }
 
+static void dsa_set_limits(struct vfio_pci_device *device)
+{
+	struct dsa_state *dsa = to_dsa_state(device);
+
+	device->driver.max_memcpy_count =
+		dsa->max_batches * dsa->max_copies_per_batch;
+	device->driver.max_memcpy_size = 1UL << dsa->gen_cap.max_xfer_shift;
+	device->driver.msi = MSIX_VECTOR;
+}
+
 static void dsa_init(struct vfio_pci_device *device)
 {
 	struct dsa_state *dsa = to_dsa_state(device);
@@ -236,11 +246,27 @@ static void dsa_init(struct vfio_pci_device *device)
 	dsa_command(device, IDXD_CMD_ENABLE_WQ);
 
 	vfio_pci_msix_enable(device, MSIX_VECTOR, 1);
+	dsa_set_limits(device);
+}
 
-	device->driver.max_memcpy_count =
-		dsa->max_batches * dsa->max_copies_per_batch;
-	device->driver.max_memcpy_size = 1UL << dsa->gen_cap.max_xfer_shift;
-	device->driver.msi = MSIX_VECTOR;
+static void dsa_attach(struct vfio_pci_device *device)
+{
+	struct dsa_state *dsa = to_dsa_state(device);
+	union gensts_reg gensts;
+
+	VFIO_ASSERT_GE(device->driver.region.size, sizeof(*dsa));
+
+	/* The device must still be enabled as dsa_init() left it. */
+	gensts.bits = readl(device->bars[0].vaddr + IDXD_GENSTATS_OFFSET);
+	VFIO_ASSERT_EQ((u32)gensts.state, IDXD_DEVICE_STATE_ENABLED,
+		       "Device was disabled or reset\n");
+	dsa_check_sw_err(device);
+
+	/* BAR0 is mapped at a different address now, refresh the pointers into it. */
+	dsa_register_cache_init(device);
+
+	vfio_pci_msix_enable(device, MSIX_VECTOR, 1);
+	dsa_set_limits(device);
 }
 
 static void dsa_remove(struct vfio_pci_device *device)
@@ -420,6 +446,7 @@ const struct vfio_pci_driver_ops dsa_ops = {
 	.name = "dsa",
 	.probe = dsa_probe,
 	.init = dsa_init,
+	.attach = dsa_attach,
 	.remove = dsa_remove,
 	.memcpy_start = dsa_memcpy_start,
 	.memcpy_wait = dsa_memcpy_wait,

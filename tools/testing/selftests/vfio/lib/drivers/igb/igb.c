@@ -224,6 +224,13 @@ static void igb_reset(struct igb *igb)
 	igb_write32(igb, E1000_IMC, 0xFFFFFFFF);
 }
 
+static void igb_set_limits(struct vfio_pci_device *device)
+{
+	device->driver.max_memcpy_size = IGB_MAX_CHUNK_SIZE;
+	device->driver.max_memcpy_count = RING_SIZE - 1;
+	device->driver.msi = MSIX_VECTOR;
+}
+
 /*
  * Program the device into a usable state.  Split out of igb_init() so it
  * can be reused after a device reset to re-program the registers that
@@ -372,9 +379,7 @@ static void igb_hw_init(struct vfio_pci_device *device)
 	igb->tx_tail = 0;
 	igb->rx_tail = 0;
 
-	device->driver.max_memcpy_size = IGB_MAX_CHUNK_SIZE;
-	device->driver.max_memcpy_count = RING_SIZE - 1;
-	device->driver.msi = MSIX_VECTOR;
+	igb_set_limits(device);
 }
 
 static void igb_init(struct vfio_pci_device *device)
@@ -398,6 +403,33 @@ static void igb_init(struct vfio_pci_device *device)
 	vfio_pci_msix_enable(device, MSIX_VECTOR, 1);
 
 	igb_hw_init(device);
+}
+
+static void igb_attach(struct vfio_pci_device *device)
+{
+	struct igb *igb = to_igb_state(device);
+	u64 iova_tx, iova_rx;
+
+	VFIO_ASSERT_GE(device->driver.region.size, sizeof(struct igb));
+
+	/* BAR0 is mapped at a different address in this process. */
+	igb->bar0 = device->bars[0].vaddr;
+
+	/*
+	 * The device must still use the rings and tails in the driver region,
+	 * i.e. it was not reset and the region is mapped at the same IOVAs.
+	 */
+	iova_tx = to_iova(device, igb->tx_ring);
+	iova_rx = to_iova(device, igb->rx_ring);
+	VFIO_ASSERT_EQ(igb_read32(igb, E1000_TDBAL(0)), (u32)iova_tx);
+	VFIO_ASSERT_EQ(igb_read32(igb, E1000_TDBAH(0)), (u32)(iova_tx >> 32));
+	VFIO_ASSERT_EQ(igb_read32(igb, E1000_RDBAL(0)), (u32)iova_rx);
+	VFIO_ASSERT_EQ(igb_read32(igb, E1000_RDBAH(0)), (u32)(iova_rx >> 32));
+	VFIO_ASSERT_EQ(igb_read32(igb, E1000_TDT(0)), igb->tx_tail);
+	VFIO_ASSERT_EQ(igb_read32(igb, E1000_RDT(0)), igb->rx_tail);
+
+	vfio_pci_msix_enable(device, MSIX_VECTOR, 1);
+	igb_set_limits(device);
 }
 
 static void igb_remove(struct vfio_pci_device *device)
@@ -578,6 +610,7 @@ const struct vfio_pci_driver_ops igb_ops = {
 	.name = "igb",
 	.probe = igb_probe,
 	.init = igb_init,
+	.attach = igb_attach,
 	.remove = igb_remove,
 	.memcpy_start = igb_memcpy_start,
 	.memcpy_wait = igb_memcpy_wait,
