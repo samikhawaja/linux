@@ -25,7 +25,9 @@ struct vfio_pci_ioeventfd {
 	bool			test_mem;
 };
 
+bool __vfio_pci_intx_mask(struct vfio_pci_core_device *vdev);
 bool vfio_pci_intx_mask(struct vfio_pci_core_device *vdev);
+void __vfio_pci_intx_unmask(struct vfio_pci_core_device *vdev);
 void vfio_pci_intx_unmask(struct vfio_pci_core_device *vdev);
 
 int vfio_pci_eventfd_replace_locked(struct vfio_pci_core_device *vdev,
@@ -151,6 +153,12 @@ static inline void vfio_pci_dma_buf_move(struct vfio_pci_core_device *vdev,
 #ifdef CONFIG_VFIO_PCI_LIVEUPDATE
 int __init vfio_pci_liveupdate_init(void);
 void vfio_pci_liveupdate_cleanup(void);
+
+static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
+{
+	/* Written in VFIO PCI Liveupdate during freeze()/unfreeze() */
+	return smp_load_acquire(&vdev->liveupdate_frozen);
+}
 #else
 static inline int vfio_pci_liveupdate_init(void)
 {
@@ -159,6 +167,11 @@ static inline int vfio_pci_liveupdate_init(void)
 
 static inline void vfio_pci_liveupdate_cleanup(void)
 {
+}
+
+static inline bool vfio_pci_dev_is_frozen(struct vfio_pci_core_device *vdev)
+{
+	return false;
 }
 #endif /* CONFIG_VFIO_PCI_LIVEUPDATE */
 
