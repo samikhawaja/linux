@@ -1059,7 +1059,7 @@ static int NS(preserve)(struct pt_iommu *iommu_table, struct iommu_domain_ser *s
 	 * Use the max_vasz_lg2 from range, as that is the current one if
 	 * DYNAMIC_TOP is supported.
 	 */
-	ser->vasz = range.max_vasz_lg2;
+	ser->max_vasz_lg2 = range.max_vasz_lg2;
 	ser->sign_extend = pt_feature(common, PT_FEAT_SIGN_EXTEND);
 
 	return 0;
@@ -1098,7 +1098,7 @@ static int NS(restore)(struct pt_iommu *iommu_table, struct iommu_domain_ser *se
 	struct pt_common *common = common_from_iommu(iommu_table);
 	struct pt_range range;
 
-	if (ser->vasz > common->max_vasz_lg2 ||
+	if (ser->max_vasz_lg2 > common->max_vasz_lg2 ||
 	    ser->top_level > PT_MAX_TOP_LEVEL)
 		return -EINVAL;
 
@@ -1108,7 +1108,7 @@ static int NS(restore)(struct pt_iommu *iommu_table, struct iommu_domain_ser *se
 	 * clamped max_vasz_lg2 instead of using the full hardware maximum
 	 * max_vasz_lg2.
 	 */
-	common->max_vasz_lg2 = ser->vasz;
+	common->max_vasz_lg2 = ser->max_vasz_lg2;
 
 	/*
 	 * Restored page tables are strictly transient and only permitted to be

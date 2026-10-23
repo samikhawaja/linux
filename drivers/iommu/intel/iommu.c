@@ -1751,7 +1751,8 @@ static int __init init_dmars(void)
 	int ret;
 
 	for_each_iommu(iommu, drhd) {
-		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
+		iommu_ser = iommu_get_preserved_data(iommu->reg_phys,
+						     IOMMU_SER_TYPE_INTEL);
 		if (drhd->ignored) {
 			intel_iommu_handle_drhd_restore_failure(iommu);
 			iommu_disable_translation(iommu);
@@ -1830,7 +1831,8 @@ static int __init init_dmars(void)
 	for_each_active_iommu(iommu, drhd) {
 		iommu_flush_write_buffer(iommu);
 
-		iommu_ser = iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL);
+		iommu_ser = iommu_get_preserved_data(iommu->reg_phys,
+						     IOMMU_SER_TYPE_INTEL);
 		if (!iommu_ser)
 			iommu_set_root_entry(iommu);
 	}

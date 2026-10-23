@@ -222,8 +222,18 @@ static int iommu_liveupdate_flb_retrieve(struct liveupdate_flb_op_args *argp)
 	/* Data must be present and valid from the previous kernel */
 	BUG_ON(!kho_restore_folio(argp->data));
 
-	mutex_init(&obj->lock);
 	ser = phys_to_virt(argp->data);
+
+	/*
+	 * FLB version mismatch is considered fatal for security reasons for
+	 * now. Check it before restoring the arrays, as their layout depends
+	 * on the version.
+	 */
+	if (ser->version != IOMMU_LUO_FLB_VERSION)
+		panic("Incoming IOMMU FLB version (v%llu) is incompatible with this kernel (v%d)\n",
+		      ser->version, IOMMU_LUO_FLB_VERSION);
+
+	mutex_init(&obj->lock);
 	obj->ser = ser;
 
 	obj->curr_domain_array = iommu_liveupdate_restore_array(ser->iommu_domain_array_phys);
@@ -290,13 +300,6 @@ static int iommu_liveupdate_flb_get_incoming(struct iommu_flb_obj **flb_objp)
 
 	flb_obj = *flb_objp;
 	mutex_lock(&flb_obj->lock);
-
-	/*
-	 * FLB version mismatch is considered fatal for security reasons for
-	 * now.
-	 */
-	if (flb_obj->ser->version != IOMMU_LUO_FLB_VERSION)
-		goto err_fatal;
 
 	/*
 	 * Array Phys of each type should be valid if the FLB was created for
@@ -416,6 +419,7 @@ static struct iommu_domain_ser *alloc_iommu_domain_ser(struct iommu_flb_obj *flb
 		return ERR_PTR(idx);
 
 	flb->curr_domain_array->objects[idx].hdr.ref_count = 1;
+	flb->curr_domain_array->objects[idx].hdr.size = sizeof(struct iommu_domain_ser);
 	return &flb->curr_domain_array->objects[idx];
 }
 
@@ -518,6 +522,7 @@ static struct iommu_hw_ser *alloc_iommu_hw_ser(struct iommu_flb_obj *flb)
 		return ERR_PTR(idx);
 
 	flb->curr_iommu_array->objects[idx].hdr.ref_count = 1;
+	flb->curr_iommu_array->objects[idx].hdr.size = sizeof(struct iommu_hw_ser);
 	return &flb->curr_iommu_array->objects[idx];
 }
 
@@ -582,6 +587,7 @@ static struct iommu_device_ser *alloc_iommu_device_ser(struct iommu_flb_obj *flb
 		return ERR_PTR(idx);
 
 	flb->curr_device_array->objects[idx].hdr.ref_count = 1;
+	flb->curr_device_array->objects[idx].hdr.size = sizeof(struct iommu_device_ser);
 	return &flb->curr_device_array->objects[idx];
 }
 
@@ -643,8 +649,8 @@ int iommu_preserve_device(struct iommu_domain *domain,
 		goto out_unlock;
 	}
 
-	device_ser->domain_iommu_ser.domain_phys = virt_to_phys(domain->domain_ser);
-	device_ser->domain_iommu_ser.iommu_phys = virt_to_phys(iommu->iommu_dev->iommu_ser);
+	device_ser->attachment.domain_phys = virt_to_phys(domain->domain_ser);
+	device_ser->iommu_phys = virt_to_phys(iommu->iommu_dev->iommu_ser);
 	device_ser->devid = pci_dev_id(pdev);
 	device_ser->pci_domain_nr = pci_domain_nr(pdev->bus);
 	device_ser->dma_owner_token = dma_owner_token;
@@ -788,12 +794,12 @@ struct iommu_domain *iommu_restore_domain(struct device *dev,
 	mutex_lock(&flb_obj->lock);
 
 	/* Preserved device should have a preserved domain */
-	if (!ser->domain_iommu_ser.domain_phys) {
+	if (!ser->attachment.domain_phys) {
 		domain = ERR_PTR(-EINVAL);
 		goto out;
 	}
 
-	domain_ser = phys_to_virt(ser->domain_iommu_ser.domain_phys);
+	domain_ser = phys_to_virt(ser->attachment.domain_phys);
 	if (domain_ser->restored_domain) {
 		domain = domain_ser->restored_domain;
 		goto out;

@@ -74,14 +74,15 @@
 
 /**
  * enum iommu_type_ser - Type of the IOMMU being preserved
- * @IOMMU_INVALID: Invalid type of IOMMU
+ * @IOMMU_SER_TYPE_INVALID: Invalid type of IOMMU
+ * @IOMMU_SER_TYPE_INTEL: Intel VT-d IOMMU
  *
  * IOMMU type is stored in the IOMMU HW state to differentiate between various
  * IOMMU HWs.
  */
 enum iommu_type_ser {
-	IOMMU_INVALID,
-	IOMMU_INTEL,
+	IOMMU_SER_TYPE_INVALID,
+	IOMMU_SER_TYPE_INTEL,
 };
 
 #define IOMMU_SER_FLAG_DELETED	(1 << 0)
@@ -91,10 +92,14 @@ enum iommu_type_ser {
  * struct iommu_hdr_ser - Common header for all serialized IOMMU objects
  * @ref_count: Reference count for the object
  * @flags: Bitmask of IOMMU_SER_FLAG_* flags indicating object state
+ * @size: Size of the serialized object
+ * @features: Bitmask of object specific features used by the preserved state
  */
 struct iommu_hdr_ser {
 	u32 ref_count;
 	u32 flags;
+	u32 size;
+	u32 features;
 } __packed;
 
 /**
@@ -102,7 +107,7 @@ struct iommu_hdr_ser {
  * @hdr: Common object header
  * @top_table_phys: Physical address of the top-level page table
  * @top_level: Level of the top-level page table
- * @vasz: Virtual Address Size
+ * @max_vasz_lg2: Maximum number of bits the VA can contain
  * @sign_extend: FEAT_SIGN_EXTEND is enabled for this domain
  * @restored_domain: Pointer to the restored domain (valid only after restore)
  */
@@ -110,34 +115,33 @@ struct iommu_domain_ser {
 	struct iommu_hdr_ser hdr;
 	u64 top_table_phys;
 	u64 top_level;
-	u32 vasz;
+	u32 max_vasz_lg2;
 	u8 sign_extend;
 	u8 padding[3];
 	struct iommu_domain *restored_domain;
 } __packed;
 
 /**
- * struct iommu_dev_map_ser - Serialized mapping between device, domain,
- *				    and IOMMU instance.
+ * struct iommu_dev_map_ser - Serialized mapping between device and domain.
  * @attachment_id: ID of the attachment between device and domain.
  * @domain_phys: Physical address of the domain
- * @iommu_phys: Physical address of the IOMMU
  */
 struct iommu_dev_map_ser {
 	u64 attachment_id;
 	u64 domain_phys;
-	u64 iommu_phys;
 } __packed;
 
 /**
  * struct iommu_device_intel_ser - Intel specific state of serialized device
+ * @features: Bitmask of Intel device specific features
  * @restored: Whether the device state is restored
  * @pasid_table: Physical address of pasid table
  * @max_pasid: Maximum supported pasid
  */
 struct iommu_device_intel_ser {
+	u32 features;
 	u8 restored;
-	u8 padding[7];
+	u8 padding[3];
 	u64 pasid_table;
 	u64 max_pasid;
 } __packed;
@@ -148,15 +152,22 @@ struct iommu_device_intel_ser {
  * @devid: Device ID
  * @pci_domain_nr: PCI domain number
  * @dma_owner_token: Token to identify the DMA owner of this device
- * @domain_iommu_ser: Domain and IOMMU mapping
+ * @iommu_phys: Physical address of the serialized IOMMU the device is behind
+ * @attachment: Attachment of the device to its domain
+ * @reserved: Reserved for future common fields.
  * @intel: Intel specific serialization data
+ *
+ * The union of IOMMU specific serialization data must be the last member, so
+ * adding a new IOMMU type only grows the struct at the end.
  */
 struct iommu_device_ser {
 	struct iommu_hdr_ser hdr;
 	u32 devid;
 	u32 pci_domain_nr;
 	u64 dma_owner_token;
-	struct iommu_dev_map_ser domain_iommu_ser;
+	u64 iommu_phys;
+	struct iommu_dev_map_ser attachment;
+	u64 reserved[2];
 	union {
 		struct iommu_device_intel_ser intel;
 	};
@@ -167,6 +178,7 @@ struct iommu_device_ser {
 
 /**
  * struct iommu_intel_ser - Serialized state of an Intel IOMMU instance
+ * @features: Bitmask of Intel IOMMU specific features
  * @sm_enabled: Whether the IOMMU was used in scalable mode
  * @phys_addr: Physical address of the IOMMU register base
  * @root_table: Physical address of the root entry table
@@ -174,24 +186,30 @@ struct iommu_device_ser {
  * preserved.
  */
 struct iommu_intel_ser {
+	u32 features;
 	u8 sm_enabled;
-	u8 padding[7];
+	u8 padding[3];
 	u64 phys_addr;
 	u64 root_table;
 	u64 context_tables_bitmap[VTD_PRESERVED_BITMAP_LONGS];
-};
+} __packed;
 
 /**
  * struct iommu_hw_ser - Serialized state of an IOMMU instance
  * @hdr: Common object header
- * @token: Unique token for the IOMMU
+ * @token: Unique token to identify the IOMMU instance
  * @type: IOMMU type serialized state belongs to
+ * @reserved: Reserved for future common fields.
  * @intel: Intel specific serialization data
+ *
+ * The union of IOMMU specific serialization data must be the last member, so
+ * adding a new IOMMU type only grows the struct at the end.
  */
 struct iommu_hw_ser {
 	struct iommu_hdr_ser hdr;
 	u64 token;
 	u64 type;
+	u64 reserved[2];
 	union {
 		struct iommu_intel_ser intel;
 	};

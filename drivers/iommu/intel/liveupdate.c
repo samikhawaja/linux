@@ -319,15 +319,15 @@ static int restore_iommu_context(struct intel_iommu *iommu,
 
 static int _restore_used_domain_ids(struct iommu_device_ser *ser, void *arg)
 {
-	int id = ser->domain_iommu_ser.attachment_id;
+	int id = ser->attachment.attachment_id;
 	struct iommu_hw_ser *iommu_hw_ser;
 	struct intel_iommu *iommu = arg;
 
-	if (WARN_ON(!ser->domain_iommu_ser.iommu_phys))
+	if (WARN_ON(!ser->iommu_phys))
 		return 0;
 
-	iommu_hw_ser = phys_to_virt(ser->domain_iommu_ser.iommu_phys);
-	if (iommu_hw_ser->type != IOMMU_INTEL)
+	iommu_hw_ser = phys_to_virt(ser->iommu_phys);
+	if (iommu_hw_ser->type != IOMMU_SER_TYPE_INTEL)
 		return 0;
 
 	/* Only allocate domain ID from associated IOMMU HW unit */
@@ -389,7 +389,7 @@ void intel_iommu_handle_drhd_restore_failure(struct intel_iommu *iommu)
 	 * translation tables, so a failure to restore and register the IOMMU
 	 * is fatal.
 	 */
-	if (iommu_get_preserved_data(iommu->reg_phys, IOMMU_INTEL))
+	if (iommu_get_preserved_data(iommu->reg_phys, IOMMU_SER_TYPE_INTEL))
 		panic("%s: failed to restore IOMMU with preserved state\n",
 		      iommu->name);
 }
@@ -420,20 +420,20 @@ static int domain_attach_restored_iommu(struct dmar_domain *domain,
 	if (!iommu_domain_restored_state(&domain->domain))
 		return -EINVAL;
 
-	if (!device_ser->domain_iommu_ser.domain_phys ||
-	    !device_ser->domain_iommu_ser.iommu_phys)
+	if (!device_ser->attachment.domain_phys ||
+	    !device_ser->iommu_phys)
 		return -EINVAL;
 
-	domain_ser = phys_to_virt(device_ser->domain_iommu_ser.domain_phys);
+	domain_ser = phys_to_virt(device_ser->attachment.domain_phys);
 	if (domain_ser->restored_domain != &domain->domain)
 		return -EINVAL;
 
-	iommu_hw_ser = phys_to_virt(device_ser->domain_iommu_ser.iommu_phys);
-	if (iommu_hw_ser->type != IOMMU_INTEL ||
+	iommu_hw_ser = phys_to_virt(device_ser->iommu_phys);
+	if (iommu_hw_ser->type != IOMMU_SER_TYPE_INTEL ||
 	    iommu_hw_ser->intel.phys_addr != iommu->reg_phys)
 		return -EINVAL;
 
-	restored_did = device_ser->domain_iommu_ser.attachment_id;
+	restored_did = device_ser->attachment.attachment_id;
 	if (!ida_exists(&iommu->domain_ida, restored_did))
 		return -EINVAL;
 
@@ -628,8 +628,8 @@ int intel_iommu_preserve_device(struct device *dev,
 	if (ret)
 		return ret;
 
-	device_ser->domain_iommu_ser.attachment_id = domain_id_iommu(info->domain,
-								     info->iommu);
+	device_ser->attachment.attachment_id = domain_id_iommu(info->domain,
+							       info->iommu);
 
 	if (!sm_supported(info->iommu))
 		return 0;
@@ -708,7 +708,7 @@ int intel_iommu_preserve(struct iommu_device *iommu_dev,
 	ser->intel.sm_enabled = sm_supported(iommu);
 	ser->intel.phys_addr = iommu->reg_phys;
 	ser->intel.root_table = __pa(iommu->root_entry);
-	ser->type = IOMMU_INTEL;
+	ser->type = IOMMU_SER_TYPE_INTEL;
 	ser->token = ser->intel.phys_addr;
 
 	return 0;

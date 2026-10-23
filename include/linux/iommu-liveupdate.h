@@ -99,7 +99,7 @@ static inline int dev_iommu_restored_attachment_id(struct device *dev,
 	struct iommu_device_ser *ser = dev_iommu_restored_state(dev);
 
 	if (ser && iommu_domain_restored_state(domain))
-		return ser->domain_iommu_ser.attachment_id;
+		return ser->attachment.attachment_id;
 
 	return -1;
 }
