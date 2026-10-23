@@ -41,87 +41,112 @@
 #include <linux/iommu-liveupdate.h>
 #include <linux/iommu.h>
 #include <linux/kexec_handover.h>
+#include <linux/kho_block.h>
 #include <linux/liveupdate.h>
 #include <linux/pci.h>
 
 #include "iommu-priv.h"
 
-#define iommu_max_objs_per_page(_array) \
-	((PAGE_SIZE - sizeof(struct iommu_array_hdr_ser)) / sizeof((_array)->objects[0]))
+/**
+ * struct iommu_ser_set - Set of serialized objects of one type
+ * @bs: KHO block set holding the serialized objects
+ * @it: Iterator used to reserve new objects at the end of @bs
+ * @count: Number of reserved objects, including the deleted ones
+ * @head_pa: Field of struct iommu_flb_ser that records the head of @bs
+ */
+struct iommu_ser_set {
+	struct kho_block_set bs;
+	struct kho_block_set_it it;
+	u64 count;
+	u64 *head_pa;
+};
 
-#define iommu_liveupdate_for_each_obj(_arr, _obj, _idx)			\
-	for ((_idx) = 0, (_obj) = (_arr)->objects;			\
-	     (_idx) < (_arr)->hdr.nr_objects; (_idx)++, (_obj)++)	\
-		if (((_obj)->hdr.flags & IOMMU_SER_FLAG_DELETED))	\
+/* Iterate over the serialized objects of a set, skipping the deleted ones */
+#define iommu_ser_set_for_each(_set, _it, _obj)				\
+	for (kho_block_set_it_init(&(_it), &(_set)->bs);		\
+	     ((_obj) = kho_block_set_it_read_entry(&(_it)));)		\
+		if ((_obj)->hdr.flags & IOMMU_SER_FLAG_DELETED)		\
 			continue;					\
 		else
-
-#define iommu_liveupdate_for_each_arr(_arr)				\
-	for (; (_arr); (_arr) = (_arr)->hdr.next_array_phys ?		\
-	     phys_to_virt((_arr)->hdr.next_array_phys) : NULL)
 
 struct iommu_flb_obj {
 	struct mutex lock;
 	struct iommu_flb_ser *ser;
 
-	struct iommu_hw_array_ser *curr_iommu_array;
-	struct iommu_domain_array_ser *curr_domain_array;
-	struct iommu_device_array_ser *curr_device_array;
+	struct iommu_ser_set iommu_set;
+	struct iommu_ser_set domain_set;
+	struct iommu_ser_set device_set;
 };
 
-static void *iommu_liveupdate_restore_array(u64 array_phys)
+/*
+ * Reserve a new serialized object at the end of the set. The deleted objects
+ * are not reused, so the objects never move and can be referenced by their
+ * physical address.
+ */
+static void *iommu_ser_set_alloc(struct iommu_ser_set *set)
 {
-	struct iommu_array_hdr_ser *array_hdr;
-	void *vaddr = array_phys ? phys_to_virt(array_phys) : NULL;
+	struct iommu_hdr_ser *hdr;
+	int ret;
 
-	while (array_phys) {
-		/*
-		 * Failure to restore preserved IOMMU state is considered fatal.
-		 *
-		 * This is because the IOMMU translations for preserved IOMMUs
-		 * were kept enabled in the previous kernel and the preserved
-		 * devices have their IOMMU domains still present. Not being
-		 * able to restore means that the memory mapped into preserved
-		 * domains might be already corrupted by the preserved devices.
-		 *
-		 * There is no way to confirm the integrity of the memory that
-		 * was mapped. BUG_ON is the safest option at this point.
-		 */
-		BUG_ON(!kho_restore_folio(array_phys));
-		array_hdr = phys_to_virt(array_phys);
-		array_phys = array_hdr->next_array_phys;
-	}
+	ret = kho_block_set_grow(&set->bs, set->count + 1);
+	if (ret)
+		return ERR_PTR(ret);
 
-	return vaddr;
+	if (!set->count)
+		kho_block_set_it_init(&set->it, &set->bs);
+
+	hdr = kho_block_set_it_reserve_entry(&set->it);
+	if (WARN_ON_ONCE(!hdr))
+		return ERR_PTR(-ENOSPC);
+
+	set->count++;
+	*set->head_pa = kho_block_set_head_pa(&set->bs);
+
+	hdr->ref_count = 1;
+	hdr->size = set->bs.entry_size;
+	return hdr;
 }
 
-static void iommu_liveupdate_unpreserve_free(u64 array_phys)
+/*
+ * Restore a set of serialized objects from the previous kernel. The objects
+ * are read using the size recorded by the previous kernel in their header.
+ *
+ * Failure to restore preserved IOMMU state is considered fatal. This is
+ * because the IOMMU translations for preserved IOMMUs were kept enabled in the
+ * previous kernel and the preserved devices have their IOMMU domains still
+ * present. Not being able to restore means that the memory mapped into
+ * preserved domains might be already corrupted by the preserved devices.
+ */
+static void iommu_ser_set_restore(struct iommu_ser_set *set, u64 head_pa)
 {
-	struct iommu_array_hdr_ser *array_hdr;
+	size_t entry_size = sizeof(struct iommu_hdr_ser);
 
-	while (array_phys) {
-		array_hdr = phys_to_virt(array_phys);
-		array_phys = array_hdr->next_array_phys;
-		kho_unpreserve_free(array_hdr);
+	if (head_pa) {
+		struct kho_block_header_ser *block = phys_to_virt(head_pa);
+		struct iommu_hdr_ser *hdr = (void *)(block + 1);
+
+		entry_size = hdr->size;
 	}
-}
 
-static void iommu_liveupdate_folio_put(u64 array_phys)
-{
-	struct iommu_array_hdr_ser *array_hdr;
+	if (entry_size < sizeof(struct iommu_hdr_ser) ||
+	    entry_size > KHO_BLOCK_SIZE - sizeof(struct kho_block_header_ser))
+		goto err_fatal;
 
-	while (array_phys) {
-		array_hdr = phys_to_virt(array_phys);
-		array_phys = array_hdr->next_array_phys;
-		folio_put(virt_to_folio(array_hdr));
-	}
+	kho_block_set_init(&set->bs, entry_size);
+	if (kho_block_set_restore(&set->bs, head_pa))
+		goto err_fatal;
+
+	return;
+
+err_fatal:
+	panic("Failed to restore IOMMU Live Update FLB\n");
 }
 
 static void iommu_liveupdate_flb_free(struct iommu_flb_obj *obj)
 {
-	iommu_liveupdate_unpreserve_free(obj->ser->iommu_domain_array_phys);
-	iommu_liveupdate_unpreserve_free(obj->ser->device_array_phys);
-	iommu_liveupdate_unpreserve_free(obj->ser->iommu_array_phys);
+	kho_block_set_destroy(&obj->domain_set.bs);
+	kho_block_set_destroy(&obj->device_set.bs);
+	kho_block_set_destroy(&obj->iommu_set.bs);
 
 	kho_unpreserve_free(obj->ser);
 	mutex_destroy(&obj->lock);
@@ -132,59 +157,33 @@ static int iommu_liveupdate_flb_preserve(struct liveupdate_flb_op_args *argp)
 {
 	struct iommu_flb_obj *obj;
 	struct iommu_flb_ser *ser;
-	void *mem;
 
 	/* obj exists only in the current kernel to track preserved state */
 	obj = kzalloc_obj(*obj, GFP_KERNEL);
 	if (!obj)
 		return -ENOMEM;
 
+	/* ser is allocated via KHO and will survive the kexec */
+	ser = kho_alloc_preserve(sizeof(*ser));
+	if (IS_ERR(ser)) {
+		kfree(obj);
+		return PTR_ERR(ser);
+	}
+
 	mutex_init(&obj->lock);
-
-	/* mem is allocated via KHO and will survive the kexec */
-	mem = kho_alloc_preserve(sizeof(*ser));
-	if (IS_ERR(mem))
-		goto err_free_obj;
-
-	ser = mem;
 	obj->ser = ser;
 	ser->version = IOMMU_LUO_FLB_VERSION;
 
-	mem = kho_alloc_preserve(PAGE_SIZE);
-	if (IS_ERR(mem))
-		goto err_free_ser;
-
-	obj->curr_domain_array = mem;
-	ser->iommu_domain_array_phys = virt_to_phys(obj->curr_domain_array);
-
-	mem = kho_alloc_preserve(PAGE_SIZE);
-	if (IS_ERR(mem))
-		goto err_free_domains;
-
-	obj->curr_device_array = mem;
-	ser->device_array_phys = virt_to_phys(obj->curr_device_array);
-
-	mem = kho_alloc_preserve(PAGE_SIZE);
-	if (IS_ERR(mem))
-		goto err_free_devices;
-
-	obj->curr_iommu_array = mem;
-	ser->iommu_array_phys = virt_to_phys(obj->curr_iommu_array);
+	kho_block_set_init(&obj->domain_set.bs, sizeof(struct iommu_domain_ser));
+	obj->domain_set.head_pa = &ser->domain_block_phys;
+	kho_block_set_init(&obj->device_set.bs, sizeof(struct iommu_device_ser));
+	obj->device_set.head_pa = &ser->device_block_phys;
+	kho_block_set_init(&obj->iommu_set.bs, sizeof(struct iommu_hw_ser));
+	obj->iommu_set.head_pa = &ser->iommu_block_phys;
 
 	argp->obj = obj;
 	argp->data = virt_to_phys(ser);
 	return 0;
-
-err_free_devices:
-	kho_unpreserve_free(obj->curr_device_array);
-err_free_domains:
-	kho_unpreserve_free(obj->curr_domain_array);
-err_free_ser:
-	kho_unpreserve_free(obj->ser);
-err_free_obj:
-	mutex_destroy(&obj->lock);
-	kfree(obj);
-	return PTR_ERR(mem);
 }
 
 static void iommu_liveupdate_flb_unpreserve(struct liveupdate_flb_op_args *argp)
@@ -196,9 +195,9 @@ static void iommu_liveupdate_flb_finish(struct liveupdate_flb_op_args *argp)
 {
 	struct iommu_flb_obj *obj = argp->obj;
 
-	iommu_liveupdate_folio_put(obj->ser->iommu_domain_array_phys);
-	iommu_liveupdate_folio_put(obj->ser->device_array_phys);
-	iommu_liveupdate_folio_put(obj->ser->iommu_array_phys);
+	kho_block_set_destroy(&obj->domain_set.bs);
+	kho_block_set_destroy(&obj->device_set.bs);
+	kho_block_set_destroy(&obj->iommu_set.bs);
 
 	folio_put(virt_to_folio(obj->ser));
 	mutex_destroy(&obj->lock);
@@ -236,9 +235,9 @@ static int iommu_liveupdate_flb_retrieve(struct liveupdate_flb_op_args *argp)
 	mutex_init(&obj->lock);
 	obj->ser = ser;
 
-	obj->curr_domain_array = iommu_liveupdate_restore_array(ser->iommu_domain_array_phys);
-	obj->curr_device_array = iommu_liveupdate_restore_array(ser->device_array_phys);
-	obj->curr_iommu_array = iommu_liveupdate_restore_array(ser->iommu_array_phys);
+	iommu_ser_set_restore(&obj->domain_set, ser->domain_block_phys);
+	iommu_ser_set_restore(&obj->device_set, ser->device_block_phys);
+	iommu_ser_set_restore(&obj->iommu_set, ser->iommu_block_phys);
 	argp->obj = obj;
 	return 0;
 }
@@ -288,7 +287,6 @@ EXPORT_SYMBOL(iommu_liveupdate_unregister_flb);
  */
 static int iommu_liveupdate_flb_get_incoming(struct iommu_flb_obj **flb_objp)
 {
-	struct iommu_flb_obj *flb_obj;
 	int ret;
 
 	ret = liveupdate_flb_get_incoming(&iommu_flb, (void **)flb_objp);
@@ -296,26 +294,9 @@ static int iommu_liveupdate_flb_get_incoming(struct iommu_flb_obj **flb_objp)
 		return ret;
 
 	if (ret)
-		goto err_fatal;
+		panic("Failed to restore IOMMU Live Update FLB\n");
 
-	flb_obj = *flb_objp;
-	mutex_lock(&flb_obj->lock);
-
-	/*
-	 * Array Phys of each type should be valid if the FLB was created for
-	 * preservation. This is true even if no devices, iommus or domains were
-	 * preserved.
-	 */
-	if (!flb_obj->ser->iommu_array_phys ||
-	    !flb_obj->ser->device_array_phys ||
-	    !flb_obj->ser->iommu_domain_array_phys)
-		goto err_fatal;
-
-	mutex_unlock(&flb_obj->lock);
 	return 0;
-
-err_fatal:
-	panic("Failed to restore IOMMU Live Update FLB\n");
 }
 
 /**
@@ -328,25 +309,21 @@ err_fatal:
 int iommu_for_each_preserved_device(iommu_preserved_device_iter_fn fn,
 				    void *arg)
 {
-	struct iommu_device_array_ser *array;
 	struct iommu_device_ser *device_ser;
 	struct iommu_flb_obj *flb_obj;
-	int ret, idx;
+	struct kho_block_set_it it;
+	int ret;
 
 	ret = iommu_liveupdate_flb_get_incoming(&flb_obj);
 	if (ret)
 		return ret;
 
-	array = phys_to_virt(flb_obj->ser->device_array_phys);
-	iommu_liveupdate_for_each_arr(array) {
-		iommu_liveupdate_for_each_obj(array, device_ser, idx) {
-			ret = fn(device_ser, arg);
-			if (ret)
-				goto out;
-		}
+	iommu_ser_set_for_each(&flb_obj->device_set, it, device_ser) {
+		ret = fn(device_ser, arg);
+		if (ret)
+			break;
 	}
 
-out:
 	liveupdate_flb_put_incoming(&iommu_flb);
 	return ret;
 }
@@ -363,64 +340,28 @@ EXPORT_SYMBOL(iommu_for_each_preserved_device);
  */
 struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser type)
 {
-	struct iommu_hw_ser *iommu_ser = NULL;
-	struct iommu_hw_array_ser *array;
+	struct iommu_hw_ser *iommu_ser;
 	struct iommu_flb_obj *flb_obj;
-	int ret, idx;
+	struct kho_block_set_it it;
+	int ret;
 
 	ret = iommu_liveupdate_flb_get_incoming(&flb_obj);
 	if (ret)
 		return NULL;
 
-	array = phys_to_virt(flb_obj->ser->iommu_array_phys);
-	iommu_liveupdate_for_each_arr(array) {
-		iommu_liveupdate_for_each_obj(array, iommu_ser, idx) {
-			if (iommu_ser->token == token && iommu_ser->type == type)
-				goto out;
-		}
+	iommu_ser_set_for_each(&flb_obj->iommu_set, it, iommu_ser) {
+		if (iommu_ser->token == token && iommu_ser->type == type)
+			break;
 	}
 
-	iommu_ser = NULL;
-out:
 	liveupdate_flb_put_incoming(&iommu_flb);
 	return iommu_ser;
 }
 EXPORT_SYMBOL(iommu_get_preserved_data);
 
-static int alloc_object_ser(void **curr_array_ptr, u64 max_objs)
-{
-	struct iommu_array_hdr_ser *curr_array = *curr_array_ptr;
-	struct iommu_array_hdr_ser *next_array;
-
-	/*
-	 * The objects marked as deleted are not reused to avoid traversal of
-	 * linked-list and arrays.
-	 */
-	if (curr_array->nr_objects >= max_objs) {
-		next_array = kho_alloc_preserve(PAGE_SIZE);
-		if (IS_ERR(next_array))
-			return PTR_ERR(next_array);
-
-		curr_array->next_array_phys = virt_to_phys(next_array);
-		*curr_array_ptr = next_array;
-		curr_array = next_array;
-	}
-
-	return curr_array->nr_objects++;
-}
-
 static struct iommu_domain_ser *alloc_iommu_domain_ser(struct iommu_flb_obj *flb)
 {
-	int idx;
-
-	idx = alloc_object_ser((void **) &flb->curr_domain_array,
-			       iommu_max_objs_per_page(flb->curr_domain_array));
-	if (idx < 0)
-		return ERR_PTR(idx);
-
-	flb->curr_domain_array->objects[idx].hdr.ref_count = 1;
-	flb->curr_domain_array->objects[idx].hdr.size = sizeof(struct iommu_domain_ser);
-	return &flb->curr_domain_array->objects[idx];
+	return iommu_ser_set_alloc(&flb->domain_set);
 }
 
 /**
@@ -514,16 +455,7 @@ EXPORT_SYMBOL_GPL(iommu_unpreserve_domain);
 
 static struct iommu_hw_ser *alloc_iommu_hw_ser(struct iommu_flb_obj *flb)
 {
-	int idx;
-
-	idx = alloc_object_ser((void **)&flb->curr_iommu_array,
-			       iommu_max_objs_per_page(flb->curr_iommu_array));
-	if (idx < 0)
-		return ERR_PTR(idx);
-
-	flb->curr_iommu_array->objects[idx].hdr.ref_count = 1;
-	flb->curr_iommu_array->objects[idx].hdr.size = sizeof(struct iommu_hw_ser);
-	return &flb->curr_iommu_array->objects[idx];
+	return iommu_ser_set_alloc(&flb->iommu_set);
 }
 
 static int iommu_preserve_locked(struct iommu_device *iommu,
@@ -579,16 +511,7 @@ static void iommu_unpreserve_locked(struct iommu_device *iommu,
 
 static struct iommu_device_ser *alloc_iommu_device_ser(struct iommu_flb_obj *flb)
 {
-	int idx;
-
-	idx = alloc_object_ser((void **)&flb->curr_device_array,
-			       iommu_max_objs_per_page(flb->curr_device_array));
-	if (idx < 0)
-		return ERR_PTR(idx);
-
-	flb->curr_device_array->objects[idx].hdr.ref_count = 1;
-	flb->curr_device_array->objects[idx].hdr.size = sizeof(struct iommu_device_ser);
-	return &flb->curr_device_array->objects[idx];
+	return iommu_ser_set_alloc(&flb->device_set);
 }
 
 /**
@@ -739,9 +662,9 @@ static inline bool match_device_ser(struct iommu_device_ser *match,
 void iommu_init_device_preserved_data(struct device *dev)
 {
 	struct iommu_device_ser *device_ser;
-	struct iommu_device_array_ser *array;
 	struct iommu_flb_obj *flb_obj;
-	int ret, idx;
+	struct kho_block_set_it it;
+	int ret;
 
 	if (!dev_is_pci(dev))
 		return;
@@ -751,18 +674,14 @@ void iommu_init_device_preserved_data(struct device *dev)
 		return;
 
 	mutex_lock(&flb_obj->lock);
-	array = phys_to_virt(flb_obj->ser->device_array_phys);
-	iommu_liveupdate_for_each_arr(array) {
-		iommu_liveupdate_for_each_obj(array, device_ser, idx) {
-			if (match_device_ser(device_ser, to_pci_dev(dev))) {
-				device_ser->hdr.flags |= IOMMU_SER_FLAG_INCOMING;
-				WRITE_ONCE(dev->iommu->device_ser, device_ser);
-				goto out;
-			}
+	iommu_ser_set_for_each(&flb_obj->device_set, it, device_ser) {
+		if (match_device_ser(device_ser, to_pci_dev(dev))) {
+			device_ser->hdr.flags |= IOMMU_SER_FLAG_INCOMING;
+			WRITE_ONCE(dev->iommu->device_ser, device_ser);
+			break;
 		}
 	}
 
-out:
 	mutex_unlock(&flb_obj->lock);
 	liveupdate_flb_put_incoming(&iommu_flb);
 }

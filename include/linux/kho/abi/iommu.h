@@ -10,6 +10,7 @@
 
 #include <linux/mutex_types.h>
 #include <linux/compiler.h>
+#include <linux/kho/abi/block.h>
 #include <linux/types.h>
 
 /**
@@ -25,33 +26,33 @@
  * Memory Layout of Serialization Structures:
  * ==========================================
  *
- * Each serialized type (IOMMU, Domain, Device) is stored in a linked list of
- * arrays. The first array is allocated initially. When an array is full, a new
- * array is allocated and its physical address is stored in the next_array_phys
- * field of the hdr of the current array.
+ * Each serialized type (IOMMU, Domain, Device) is stored in a set of KHO
+ * serialization blocks (see include/linux/kho/abi/block.h). Each block starts
+ * with a struct kho_block_header_ser, followed by the serialized objects of
+ * the respective type. Blocks are linked through the next field of the header.
  *
  * Top Level (struct iommu_flb_ser):
  * +---------------------------+
- * | - iommu_array_phys        |
- * | - iommu_domain_array_phys |
- * | - device_array_phys       |
+ * | - iommu_block_phys        |
+ * | - domain_block_phys       |
+ * | - device_block_phys       |
  * +---------------------------+
  *
- * Each Array contains the serialized objects of the respective type. For
- * example see below the representation of struct iommu_domain_array_ser.
+ * For example see below the representation of the domain blocks.
  *
  * +---------------------------+   +---------------------------+
- * | iommu_domain_array_ser    |-->| iommu_domain_array_ser    |--> NULL
- * | - hdr.next_array_phys     |   | - hdr.next_array_phys     |
- * | - hdr.nr_objects          |   | - hdr.nr_objects          |
+ * | kho_block_header_ser      |-->| kho_block_header_ser      |--> NULL
+ * | - next                    |   | - next                    |
+ * | - count                   |   | - count                   |
  * |                           |   |                           |
- * | objects[]:                |   | objects[]:                |
  * | [ iommu_domain_ser ]      |   | [ iommu_domain_ser ]      |
  * | [ iommu_domain_ser ]      |   | [ iommu_domain_ser ]      |
  * | ...                       |   | ...                       |
  * +---------------------------+   +---------------------------+
  *
- * Each object in the array starts with a common header (iommu_hdr_ser).
+ * Each object in a block starts with a common header (iommu_hdr_ser). The
+ * size in the header is the size of each object in the block, so the next
+ * kernel can read the objects even if their size has changed.
  * For example, the layout of struct iommu_domain_ser is:
  *
  *   +-----------------------------+
@@ -216,56 +217,19 @@ struct iommu_hw_ser {
 } __packed;
 
 /**
- * struct iommu_array_hdr_ser - Header for an array of serialized objects
- * @next_array_phys: Physical address of the next array of objects
- * @nr_objects: Number of objects in the current array
- */
-struct iommu_array_hdr_ser {
-	u64 next_array_phys;
-	u64 nr_objects;
-} __packed;
-
-/**
- * struct iommu_hw_array_ser - An array containing serialized IOMMU HWs
- * @hdr: Array header
- * @objects: Array of serialized IOMMU devices
- */
-struct iommu_hw_array_ser {
-	struct iommu_array_hdr_ser hdr;
-	struct iommu_hw_ser objects[];
-} __packed;
-
-/**
- * struct iommu_domain_array_ser - An array containing serialized domains
- * @hdr: Array header
- * @objects: Array of serialized domains
- */
-struct iommu_domain_array_ser {
-	struct iommu_array_hdr_ser hdr;
-	struct iommu_domain_ser objects[];
-} __packed;
-
-/**
- * struct iommu_device_array_ser - An array containing serialized devices
- * @hdr: Array header
- * @objects: Array of serialized devices
- */
-struct iommu_device_array_ser {
-	struct iommu_array_hdr_ser hdr;
-	struct iommu_device_ser objects[];
-} __packed;
-
-/**
  * struct iommu_flb_ser - Top-level serialization structure
- * @iommu_array_phys: Physical address of the first array of IOMMU HWs
- * @iommu_domain_array_phys: Physical address of the first array of domains
- * @device_array_phys: Physical address of the first array of devices
+ * @iommu_block_phys: Physical address of the first KHO block of IOMMU HWs, or
+ *                    0 if none
+ * @domain_block_phys: Physical address of the first KHO block of domains, or
+ *                     0 if none
+ * @device_block_phys: Physical address of the first KHO block of devices, or 0
+ *                     if none
  */
 struct iommu_flb_ser {
 	u64 version;
-	u64 iommu_array_phys;
-	u64 iommu_domain_array_phys;
-	u64 device_array_phys;
+	u64 iommu_block_phys;
+	u64 domain_block_phys;
+	u64 device_block_phys;
 } __packed;
 
 #endif /* _LINUX_KHO_ABI_IOMMU_H */
