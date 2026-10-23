@@ -3548,6 +3548,8 @@ static void intel_iommu_release_device(struct device *dev)
 
 	if (!dev_iommu_restored_state(dev))
 		intel_pasid_free_table(dev);
+	else
+		kfree(info->pasid_table);
 	intel_iommu_debugfs_remove_dev(info);
 	kfree(info);
 }
