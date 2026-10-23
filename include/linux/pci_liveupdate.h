@@ -32,6 +32,7 @@ struct pci_liveupdate {
 };
 
 struct pci_dev;
+struct pci_saved_state;
 
 #ifdef CONFIG_PCI_LIVEUPDATE
 int pci_liveupdate_register_flb(struct liveupdate_file_handler *fh);
@@ -40,6 +41,12 @@ int pci_liveupdate_preserve(struct pci_dev *dev);
 void pci_liveupdate_unpreserve(struct pci_dev *dev);
 void pci_liveupdate_finish(struct pci_dev *dev);
 bool pci_liveupdate_is_incoming(struct pci_dev *dev);
+size_t pci_liveupdate_saved_state_ser_size(const struct pci_saved_state *state);
+int pci_liveupdate_serialize_saved_state(const struct pci_saved_state *state,
+					 void *buf, size_t size);
+struct pci_saved_state *pci_liveupdate_deserialize_saved_state(struct pci_dev *dev,
+							       const void *buf,
+							       size_t size);
 #else
 static inline int pci_liveupdate_register_flb(struct liveupdate_file_handler *fh)
 {

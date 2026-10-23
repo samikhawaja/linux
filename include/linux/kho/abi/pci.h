@@ -93,4 +93,51 @@ struct pci_ser {
 	u64 devices;
 } __packed;
 
+/**
+ * DOC: PCI Saved State Live Update ABI
+ *
+ * Drivers that keep a PCI device running across a Live Update can hand the
+ * state returned by pci_store_saved_state() to the next kernel by embedding a
+ * struct pci_saved_state_ser in their own preserved data, produced and parsed
+ * by the PCI core via pci_liveupdate_serialize_saved_state() and
+ * pci_liveupdate_deserialize_saved_state().
+ *
+ * Like the FLB data above, this layout is a contract between kernels and is
+ * extended by appending fields and defining bits in ``flags`` for features the
+ * next kernel must understand, while recording the size of each entry. Unlike
+ * the FLB data, it is embedded in a driver's preserved state rather than
+ * referenced from struct pci_ser, and validation failures are reported to the
+ * calling driver rather than panicking.
+ */
+
+/**
+ * struct pci_cap_saved_data_ser - A saved capability in a struct pci_saved_state_ser
+ * @cap_nr: Capability ID (PCI_CAP_ID_* or PCI_EXT_CAP_ID_*).
+ * @extended: 1 if @cap_nr is an extended capability ID, 0 otherwise.
+ * @size: Size of @data in bytes, never 0.
+ * @data: The saved registers.
+ */
+struct pci_cap_saved_data_ser {
+	u16 cap_nr;
+	u16 extended;
+	u32 size;
+	u8 data[];
+} __packed;
+
+/**
+ * struct pci_saved_state_ser - Serialized struct pci_saved_state
+ * @size: Size in bytes of this struct, including all entries in @caps.
+ * @flags: Features a kernel must support to restore the state. None defined.
+ * @nr_caps: Number of entries in @caps.
+ * @config_space: The saved standard configuration header.
+ * @caps: @nr_caps struct pci_cap_saved_data_ser entries.
+ */
+struct pci_saved_state_ser {
+	u32 size;
+	u32 flags;
+	u32 nr_caps;
+	u32 config_space[16];
+	u8 caps[];
+} __packed;
+
 #endif /* _LINUX_KHO_ABI_PCI_H */

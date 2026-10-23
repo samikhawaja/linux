@@ -1036,3 +1036,226 @@ void pci_liveupdate_unregister_flb(struct liveupdate_file_handler *fh)
 	liveupdate_unregister_flb(fh, &pci_liveupdate_flb);
 }
 EXPORT_SYMBOL_GPL(pci_liveupdate_unregister_flb);
+
+static const struct pci_cap_saved_data *pci_saved_cap_next(const struct pci_cap_saved_data *cap)
+{
+	return (const void *)cap + sizeof(*cap) + cap->size;
+}
+
+/**
+ * pci_liveupdate_saved_state_ser_size() - Size needed to serialize a saved state
+ * @state: Saved state returned by pci_store_saved_state(), or NULL.
+ *
+ * Return: Number of bytes needed by pci_liveupdate_serialize_saved_state(), or
+ * 0 if @state is NULL.
+ */
+size_t pci_liveupdate_saved_state_ser_size(const struct pci_saved_state *state)
+{
+	const struct pci_cap_saved_data *cap;
+	size_t size;
+
+	if (!state)
+		return 0;
+
+	size = sizeof(struct pci_saved_state_ser);
+	for (cap = state->cap; cap->size; cap = pci_saved_cap_next(cap))
+		size += sizeof(struct pci_cap_saved_data_ser) + cap->size;
+
+	return size;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_saved_state_ser_size);
+
+/**
+ * pci_liveupdate_serialize_saved_state() - Serialize a struct pci_saved_state
+ * @state: Saved state returned by pci_store_saved_state().
+ * @buf: Destination buffer.
+ * @size: Size of @buf, must equal pci_liveupdate_saved_state_ser_size(@state).
+ *
+ * Drivers that keep a device running across Live Update can use this to hand
+ * the state captured by pci_store_saved_state() (e.g. before the device was
+ * handed to userspace) to the next kernel, which never sees the device in that
+ * state.
+ *
+ * Return: 0 on success, -EINVAL if the arguments are invalid.
+ */
+int pci_liveupdate_serialize_saved_state(const struct pci_saved_state *state,
+					 void *buf, size_t size)
+{
+	const struct pci_cap_saved_data *cap;
+	struct pci_saved_state_ser *ser = buf;
+	size_t off;
+	u32 nr = 0;
+
+	if (!state || !buf || size != pci_liveupdate_saved_state_ser_size(state))
+		return -EINVAL;
+
+	memset(buf, 0, size);
+	ser->size = size;
+	memcpy(ser->config_space, state->config_space, sizeof(ser->config_space));
+
+	off = sizeof(*ser);
+	for (cap = state->cap; cap->size; cap = pci_saved_cap_next(cap)) {
+		struct pci_cap_saved_data_ser *cap_ser = buf + off;
+
+		cap_ser->cap_nr = cap->cap_nr;
+		cap_ser->extended = cap->cap_extended ? 1 : 0;
+		cap_ser->size = cap->size;
+		memcpy(cap_ser->data, cap->data, cap->size);
+
+		off += sizeof(*cap_ser) + cap->size;
+		nr++;
+	}
+
+	ser->nr_caps = nr;
+	return 0;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_serialize_saved_state);
+
+/* Read the byte at config space offset @where from a saved config header. */
+static u8 pci_saved_config_byte(const u32 *config_space, int where)
+{
+	return config_space[where / 4] >> ((where % 4) * 8);
+}
+
+/*
+ * Compare the bits in @mask of the config space dword at offset @where with
+ * the saved config header.
+ */
+static int pci_validate_saved_config_dword(struct pci_dev *dev,
+					   const u32 *config_space, int where,
+					   u32 mask)
+{
+	u32 val;
+
+	if (pci_read_config_dword(dev, where, &val) ||
+	    (val & mask) != (config_space[where / 4] & mask))
+		return -EINVAL;
+
+	return 0;
+}
+
+static int pci_validate_saved_config_header(struct pci_dev *dev,
+					    const u32 *config_space)
+{
+	u8 hdr_type;
+	int bar;
+
+	if (config_space[PCI_VENDOR_ID / 4] !=
+	    ((u32)dev->device << 16 | dev->vendor))
+		return -EINVAL;
+
+	/* Only Type 0 (Normal) configuration headers are supported. */
+	hdr_type = pci_saved_config_byte(config_space, PCI_HEADER_TYPE) &
+		   PCI_HEADER_TYPE_MASK;
+	if (hdr_type != PCI_HEADER_TYPE_NORMAL ||
+	    dev->hdr_type != PCI_HEADER_TYPE_NORMAL)
+		return -EINVAL;
+
+	/*
+	 * Verify that BAR0-5 and the expansion ROM BAR address match the
+	 * current hardware values so that restoring the saved state cannot
+	 * write stale BAR addresses if resources were reassigned in the new
+	 * kernel.
+	 */
+	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
+		if (pci_validate_saved_config_dword(dev, config_space,
+						    PCI_BASE_ADDRESS_0 + bar * 4,
+						    ~0U))
+			return -EINVAL;
+	}
+
+	/*
+	 * Only the address bits of the ROM BAR are compared, since its enable
+	 * and validation status bits may legitimately differ.
+	 */
+	return pci_validate_saved_config_dword(dev, config_space,
+					       PCI_ROM_ADDRESS,
+					       PCI_ROM_ADDRESS_MASK);
+}
+
+/**
+ * pci_liveupdate_deserialize_saved_state() - Rebuild a struct pci_saved_state
+ * @dev: The PCI device the saved state belongs to.
+ * @buf: Buffer written by pci_liveupdate_serialize_saved_state().
+ * @size: Size of @buf in bytes.
+ *
+ * Validates @buf against the PCI Saved State Live Update ABI and @dev's
+ * standard configuration header, and allocates a struct pci_saved_state that
+ * can be passed to pci_load_saved_state() and freed with kfree(). @buf is not
+ * modified or freed.
+ *
+ * Return: Newly allocated struct pci_saved_state on success, or an ERR_PTR() on
+ * failure (-EINVAL if @buf is malformed or incompatible with @dev, -EOPNOTSUPP
+ * if @buf uses an unsupported flag, -ENOMEM on allocation failure).
+ */
+struct pci_saved_state *pci_liveupdate_deserialize_saved_state(struct pci_dev *dev,
+							       const void *buf,
+							       size_t size)
+{
+	const struct pci_saved_state_ser *ser = buf;
+	struct pci_cap_saved_data *cap;
+	struct pci_saved_state *state;
+	size_t off, state_size;
+	u32 i;
+
+	if (!dev || !buf || size < sizeof(*ser))
+		return ERR_PTR(-EINVAL);
+
+	if (ser->size != size)
+		return ERR_PTR(-EINVAL);
+
+	if (ser->flags)
+		return ERR_PTR(-EOPNOTSUPP);
+
+	if (pci_validate_saved_config_header(dev, ser->config_space))
+		return ERR_PTR(-EINVAL);
+
+	off = sizeof(*ser);
+	state_size = sizeof(*state) + sizeof(*cap);
+
+	for (i = 0; i < ser->nr_caps; i++) {
+		const struct pci_cap_saved_data_ser *cap_ser;
+		size_t entry_size;
+
+		if (size - off < sizeof(*cap_ser))
+			return ERR_PTR(-EINVAL);
+
+		cap_ser = buf + off;
+		if (!cap_ser->size || cap_ser->size > PCI_CFG_SPACE_EXP_SIZE ||
+		    cap_ser->extended > 1)
+			return ERR_PTR(-EINVAL);
+
+		entry_size = sizeof(*cap_ser) + cap_ser->size;
+		if (size - off < entry_size)
+			return ERR_PTR(-EINVAL);
+
+		off += entry_size;
+		state_size += sizeof(*cap) + cap_ser->size;
+	}
+
+	if (off != size)
+		return ERR_PTR(-EINVAL);
+
+	state = kzalloc(state_size, GFP_KERNEL);
+	if (!state)
+		return ERR_PTR(-ENOMEM);
+
+	memcpy(state->config_space, ser->config_space, sizeof(state->config_space));
+
+	off = sizeof(*ser);
+	cap = state->cap;
+	for (i = 0; i < ser->nr_caps; i++) {
+		const struct pci_cap_saved_data_ser *cap_ser = buf + off;
+
+		cap->cap_nr = cap_ser->cap_nr;
+		cap->cap_extended = cap_ser->extended;
+		cap->size = cap_ser->size;
+		memcpy(cap->data, cap_ser->data, cap_ser->size);
+
+		off += sizeof(*cap_ser) + cap_ser->size;
+		cap = (void *)cap + sizeof(*cap) + cap->size;
+	}
+
+	return state;
+}
+EXPORT_SYMBOL_GPL(pci_liveupdate_deserialize_saved_state);
