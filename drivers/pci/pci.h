@@ -244,6 +244,12 @@ struct pci_cap_saved_data {
 	u32		data[];
 };
 
+/* Opaque to drivers, see pci_store_saved_state() */
+struct pci_saved_state {
+	u32 config_space[16];
+	struct pci_cap_saved_data cap[];
+};
+
 struct pci_cap_saved_state {
 	struct hlist_node		next;
 	struct pci_cap_saved_data	cap;
