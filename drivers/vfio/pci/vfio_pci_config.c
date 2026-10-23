@@ -644,10 +644,10 @@ static int vfio_basic_config_write(struct vfio_pci_core_device *vdev, int pos,
 
 		if (virt_intx_disable && !vdev->virq_disabled) {
 			vdev->virq_disabled = true;
-			vfio_pci_intx_mask(vdev);
+			__vfio_pci_intx_mask(vdev);
 		} else if (!virt_intx_disable && vdev->virq_disabled) {
 			vdev->virq_disabled = false;
-			vfio_pci_intx_unmask(vdev);
+			__vfio_pci_intx_unmask(vdev);
 		}
 	}
 
@@ -1957,7 +1957,20 @@ ssize_t vfio_pci_config_rw_single(struct vfio_pci_core_device *vdev,
 		if (copy_from_user(&val, buf, count))
 			return -EFAULT;
 
-		ret = perm->writefn(vdev, *ppos, count, perm, offset, val);
+		/*
+		 * Serialize with Live Update freeze(), which holds igate, so a
+		 * write that passed the lockless frozen check in vfio_pci_rw()
+		 * cannot change the device or vconfig after freeze() has
+		 * snapshotted vconfig and masked INTx.  The INTx disable
+		 * emulation in vfio_basic_config_write() relies on igate too.
+		 */
+		mutex_lock(&vdev->igate);
+		if (vfio_pci_dev_is_frozen(vdev))
+			ret = -EIO;
+		else
+			ret = perm->writefn(vdev, *ppos, count, perm, offset,
+					    val);
+		mutex_unlock(&vdev->igate);
 	} else {
 		if (perm->readfn) {
 			ret = perm->readfn(vdev, *ppos, count,

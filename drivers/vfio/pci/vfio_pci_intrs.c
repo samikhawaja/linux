@@ -99,7 +99,7 @@ static void vfio_send_intx_eventfd(void *opaque, void *data)
 }
 
 /* Returns true if the INTx vfio_pci_irq_ctx.masked value is changed. */
-static bool __vfio_pci_intx_mask(struct vfio_pci_core_device *vdev)
+bool __vfio_pci_intx_mask(struct vfio_pci_core_device *vdev)
 {
 	struct pci_dev *pdev = vdev->pdev;
 	struct vfio_pci_irq_ctx *ctx;
@@ -203,7 +203,7 @@ out_unlock:
 	return ret;
 }
 
-static void __vfio_pci_intx_unmask(struct vfio_pci_core_device *vdev)
+void __vfio_pci_intx_unmask(struct vfio_pci_core_device *vdev)
 {
 	struct vfio_pci_irq_ctx *ctx = vfio_irq_ctx_get(vdev, 0);
 
