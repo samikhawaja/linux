@@ -105,17 +105,14 @@ static int iopt_area_validate_file_pages(struct iopt_area *area)
 	while (index <= last_index) {
 		phys_addr_t phys = iommu_iova_to_phys(area->storage_domain,
 						      iova) - page_offset;
-		struct page *page = pfn_to_page(PHYS_PFN(phys));
-		struct folio *folio = page_folio(page);
-		unsigned long nr;
+		struct folio *folio = page_folio(pfn_to_page(PHYS_PFN(phys)));
 
 		if (folio->mapping != pages->file->f_mapping)
 			return -EINVAL;
 
-		nr = folio_nr_pages(folio) - folio_page_idx(folio, page);
-		iova += nr * PAGE_SIZE - page_offset;
+		iova += PAGE_SIZE - page_offset;
 		page_offset = 0;
-		index += nr;
+		index++;
 	}
 
 	return 0;
