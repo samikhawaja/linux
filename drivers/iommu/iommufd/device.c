@@ -1790,6 +1790,9 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 	if (!idev)
 		return -EINVAL;
 
+	if (iommufd_device_is_noiommu(idev))
+		return -EOPNOTSUPP;
+
 	igroup = idev->igroup;
 	mutex_lock(&igroup->lock);
 	if (idev->liveupdate_preserved) {
@@ -1820,14 +1823,14 @@ int iommufd_device_preserve(struct liveupdate_session *s,
 	}
 
 	hwpt_paging = to_hwpt_paging(hwpt);
+	ret = liveupdate_get_token_outgoing(s, idev->ictx->file, iommufd_tokenp);
+	if (ret)
+		goto out;
+
 	if (!hwpt_paging->liveupdate_preserved) {
 		ret = -EINVAL;
 		goto out;
 	}
-
-	ret = liveupdate_get_token_outgoing(s, idev->ictx->file, iommufd_tokenp);
-	if (ret)
-		goto out;
 
 	ret = iommu_preserve_device(hwpt_paging->common.domain,
 				    idev->dev,
