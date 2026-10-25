@@ -158,9 +158,6 @@ struct iommu_device_intel_ser {
  * @attachment: Attachment of the device to its domain
  * @reserved: Reserved for future common fields.
  * @intel: Intel specific serialization data
- *
- * The union of IOMMU specific serialization data must be the last member, so
- * adding a new IOMMU type only grows the struct at the end.
  */
 struct iommu_device_ser {
 	struct iommu_hdr_ser hdr;
