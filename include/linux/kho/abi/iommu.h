@@ -127,10 +127,14 @@ struct iommu_domain_ser {
  * struct iommu_attachment_ser - Serialized attachment between device and domain.
  * @attachment_id: ID of the attachment between device and domain.
  * @domain_phys: Physical address of the domain
+ * @pasid: PASID of the attachment
+ * @padding: Padding
  */
 struct iommu_attachment_ser {
 	u64 attachment_id;
 	u64 domain_phys;
+	u32 pasid;
+	u32 padding;
 } __packed;
 
 /**
