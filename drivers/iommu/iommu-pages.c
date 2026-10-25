@@ -185,7 +185,8 @@ void iommu_restore_pages(u64 phys)
 	unsigned int order;
 
 	folio = kho_restore_folio(phys);
-	BUG_ON(!folio);
+	if (!folio)
+		panic("Failed to restore preserved IOMMU page %llx\n", phys);
 
 	iopt = folio_ioptdesc(folio);
 
