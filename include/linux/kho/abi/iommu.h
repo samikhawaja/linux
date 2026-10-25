@@ -124,11 +124,11 @@ struct iommu_domain_ser {
 } __packed;
 
 /**
- * struct iommu_dev_map_ser - Serialized mapping between device and domain.
+ * struct iommu_attachment_ser - Serialized attachment between device and domain.
  * @attachment_id: ID of the attachment between device and domain.
  * @domain_phys: Physical address of the domain
  */
-struct iommu_dev_map_ser {
+struct iommu_attachment_ser {
 	u64 attachment_id;
 	u64 domain_phys;
 } __packed;
@@ -168,7 +168,7 @@ struct iommu_device_ser {
 	u32 pci_domain_nr;
 	u64 dma_owner_token;
 	u64 iommu_phys;
-	struct iommu_dev_map_ser attachment;
+	struct iommu_attachment_ser attachment;
 	u64 reserved[2];
 	union {
 		struct iommu_device_intel_ser intel;
