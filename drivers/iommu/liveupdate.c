@@ -450,11 +450,6 @@ out_unlock:
 }
 EXPORT_SYMBOL_GPL(iommu_unpreserve_domain);
 
-static struct iommu_hw_ser *alloc_iommu_hw_ser(struct iommu_flb_obj *flb)
-{
-	return iommu_ser_set_alloc(&flb->iommu_set);
-}
-
 static int iommu_preserve_locked(struct iommu_device *iommu,
 				 struct iommu_flb_obj *flb_obj)
 {
@@ -470,7 +465,7 @@ static int iommu_preserve_locked(struct iommu_device *iommu,
 		return 0;
 	}
 
-	iommu_hw_ser = alloc_iommu_hw_ser(flb_obj);
+	iommu_hw_ser = iommu_ser_set_alloc(&flb_obj->iommu_set);
 	if (IS_ERR(iommu_hw_ser))
 		return PTR_ERR(iommu_hw_ser);
 
@@ -504,11 +499,6 @@ static void iommu_unpreserve_locked(struct iommu_device *iommu,
 	iommu->iommu_ser = NULL;
 	iommu->ops->unpreserve(iommu, iommu_hw_ser);
 	iommu_hw_ser->hdr.flags |= IOMMU_SER_FLAG_DELETED;
-}
-
-static struct iommu_device_ser *alloc_iommu_device_ser(struct iommu_flb_obj *flb)
-{
-	return iommu_ser_set_alloc(&flb->device_set);
 }
 
 /**
@@ -560,7 +550,7 @@ int iommu_preserve_device(struct iommu_domain *domain,
 		goto out_unlock;
 	}
 
-	device_ser = alloc_iommu_device_ser(flb_obj);
+	device_ser = iommu_ser_set_alloc(&flb_obj->device_set);
 	if (IS_ERR(device_ser)) {
 		ret = PTR_ERR(device_ser);
 		goto out_unlock;
