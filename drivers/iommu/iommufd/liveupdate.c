@@ -175,6 +175,7 @@ static int iommufd_preserve_hwpt(struct iommufd_hwpt_paging *hwpt,
 			goto err;
 	}
 
+	hwpt_ser->size = sizeof(*hwpt_ser);
 	hwpt_ser->token = hwpt->liveupdate_token;
 
 	rc = iommu_preserve_domain(hwpt->common.domain, &domain_ser);
@@ -263,6 +264,7 @@ static int iommufd_liveupdate_preserve(struct liveupdate_file_op_args *args)
 	}
 
 	iommufd_ser = mem;
+	iommufd_ser->size = sizeof(*iommufd_ser);
 
 	/* Preserve HWPTs */
 	i = 0;

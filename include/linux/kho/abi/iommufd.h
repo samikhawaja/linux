@@ -26,21 +26,29 @@
 #define IOMMUFD_LUO_COMPATIBLE "iommufd-v1"
 
 /**
- * struct iommu_hwpt_ser - IOMMUFD HWPT serialized state
+ * struct iommufd_hwpt_ser - IOMMUFD HWPT serialized state
+ * @size: Size of this struct
+ * @padding: Padding
  * @domain_ser_phys: Physical address of the serialized state of associated domain
  * @token: User provided token
  */
 struct iommufd_hwpt_ser {
+	u32 size;
+	u32 padding;
 	u64 domain_ser_phys;
 	u64 token;
 } __packed;
 
 /**
- * struct iommu_ser - IOMMUFD serialized state
+ * struct iommufd_ser - IOMMUFD serialized state
+ * @size: Size of this struct
+ * @features: Bitmask of iommufd specific features used by the preserved state
  * @nr_hwpts: Number of preserved HWPTs
  * @hwpt_array: Array of serialized state of preserved HWPTs
  */
 struct iommufd_ser {
+	u32 size;
+	u32 features;
 	u64 nr_hwpts;
 	struct iommufd_hwpt_ser hwpt_array[];
 } __packed;
