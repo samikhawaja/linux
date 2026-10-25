@@ -200,9 +200,6 @@ struct iommu_intel_ser {
  * @type: IOMMU type serialized state belongs to
  * @reserved: Reserved for future common fields.
  * @intel: Intel specific serialization data
- *
- * The union of IOMMU specific serialization data must be the last member, so
- * adding a new IOMMU type only grows the struct at the end.
  */
 struct iommu_hw_ser {
 	struct iommu_hdr_ser hdr;
