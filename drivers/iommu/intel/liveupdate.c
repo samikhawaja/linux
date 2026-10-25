@@ -379,7 +379,7 @@ void intel_iommu_liveupdate_restore_root_table(struct intel_iommu *iommu,
 }
 
 /**
- * intel_iommu_handle_drhd_restore_failure() - Panic if a DRHD unit with preserved state fails initialization
+ * intel_iommu_handle_drhd_restore_failure() - Panic if a preserved DRHD unit fails to initialize
  * @iommu: Target IOMMU
  */
 void intel_iommu_handle_drhd_restore_failure(struct intel_iommu *iommu)
