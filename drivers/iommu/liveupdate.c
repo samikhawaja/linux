@@ -70,6 +70,7 @@ struct iommu_ser_set {
 		else
 
 struct iommu_flb_obj {
+	/* Protects the serialized state and the object sets */
 	struct mutex lock;
 	struct iommu_flb_ser *ser;
 
@@ -219,7 +220,8 @@ static int iommu_liveupdate_flb_retrieve(struct liveupdate_flb_op_args *argp)
 	}
 
 	/* Data must be present and valid from the previous kernel */
-	BUG_ON(!kho_restore_folio(argp->data));
+	if (!kho_restore_folio(argp->data))
+		panic("Failed to restore IOMMU Live Update FLB\n");
 
 	ser = phys_to_virt(argp->data);
 

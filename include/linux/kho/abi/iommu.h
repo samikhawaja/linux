@@ -9,6 +9,7 @@
 #define _LINUX_KHO_ABI_IOMMU_H
 
 #include <linux/mutex_types.h>
+#include <linux/bits.h>
 #include <linux/compiler.h>
 #include <linux/kho/abi/block.h>
 #include <linux/types.h>
@@ -86,8 +87,8 @@ enum iommu_type_ser {
 	IOMMU_SER_TYPE_INTEL,
 };
 
-#define IOMMU_SER_FLAG_DELETED	(1 << 0)
-#define IOMMU_SER_FLAG_INCOMING	(1 << 1)
+#define IOMMU_SER_FLAG_DELETED	BIT(0)
+#define IOMMU_SER_FLAG_INCOMING	BIT(1)
 
 /**
  * struct iommu_hdr_ser - Common header for all serialized IOMMU objects
