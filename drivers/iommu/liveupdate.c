@@ -361,11 +361,6 @@ struct iommu_hw_ser *iommu_get_preserved_data(u64 token, enum iommu_type_ser typ
 }
 EXPORT_SYMBOL(iommu_get_preserved_data);
 
-static struct iommu_domain_ser *alloc_iommu_domain_ser(struct iommu_flb_obj *flb)
-{
-	return iommu_ser_set_alloc(&flb->domain_set);
-}
-
 /**
  * iommu_preserve_domain() - Preserve an IOMMU domain across live update
  * @domain: Domain to preserve
@@ -393,7 +388,7 @@ int iommu_preserve_domain(struct iommu_domain *domain, struct iommu_domain_ser *
 		goto out_unlock;
 	}
 
-	domain_ser = alloc_iommu_domain_ser(flb_obj);
+	domain_ser = iommu_ser_set_alloc(&flb_obj->domain_set);
 	if (IS_ERR(domain_ser)) {
 		ret = PTR_ERR(domain_ser);
 		goto out_unlock;
