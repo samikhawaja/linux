@@ -1,0 +1,81 @@
+From ed54aa9fd677178c5d263d8fd8df386ff8f3faf2 Mon Sep 17 00:00:00 2001
+From: Samiullah Khawaja <skhawaja@google.com>
+Date: Mon, 26 Oct 2026 21:57:31 +0000
+Subject: [PATCH 0/2] mm/memfd: add F_SEAL_PUNCH_HOLE
+
+This series introduces F_SEAL_PUNCH_HOLE, a new memfd seal that prevents
+holes from being punched into a shmem or hugetlbfs memfd while leaving
+the file fully writable.
+
+Background
+==========
+
+Drivers such as udmabuf and iommufd (via IOMMU_IOAS_MAP_FILE) use
+memfd_pin_folios() to pin the folios backing a memfd and hand them to a
+device for DMA. Pinning keeps those folios allocated, but it does not
+keep them in the file. If userspace later calls
+fallocate(FALLOC_FL_PUNCH_HOLE) or madvise(MADV_REMOVE) on the range,
+the folios are dropped from the page cache while the device continues
+to use them. The pin holder is never notified, and from that point on
+the device and the file silently diverge.
+
+The existing seals only partially address this. F_SEAL_SHRINK prevents
+pages from being dropped by truncation, which is why udmabuf requires
+it. Hole punching, however, is only blocked by F_SEAL_WRITE and
+F_SEAL_FUTURE_WRITE, and both of those also forbid writes. That makes
+them unusable for memory that must stay writable, such as guest RAM or
+DMA buffers, and udmabuf explicitly rejects memfds that carry them.
+
+Proposal
+========
+
+F_SEAL_PUNCH_HOLE fills this gap. Once it is set,
+fallocate(FALLOC_FL_PUNCH_HOLE) and madvise(MADV_REMOVE) fail with
+-EPERM, while reads, writes and resizing are unaffected. Combined with
+F_SEAL_SHRINK, it guarantees that userspace cannot remove pages from
+the memfd while the memfd remains writable.
+
+Motivation
+==========
+
+The immediate user is IOMMU live update. Before iommufd preserves a
+memfd-backed mapping across kexec, it must confirm that every pinned
+page still belongs to the file. Today this requires walking each mapped
+page at preserve time, which is costly for large mappings. With
+F_SEAL_PUNCH_HOLE and F_SEAL_SHRINK in place, iommufd can verify the
+seals once at IOMMU_IOAS_MAP_FILE time and skip the walk entirely.
+udmabuf can benefit in the same way. Neither user is changed in this
+series.
+
+The iommufd change that would use the seal is discussed in the IOMMU
+live update series:
+https://lore.kernel.org/all/arVYa_90j0oN1hnu@google.com/
+
+Testing
+=======
+
+Patch 2 extends the memfd selftests to cover the new seal on both shmem
+and hugetlbfs. Both "memfd_test" and "memfd_test hugetlbfs" pass in
+QEMU.
+
+The hugetlbfs run depends on a separately posted fix. Without it, the
+run aborts in the existing SEAL-EXEC test before it reaches the new
+tests:
+https://lore.kernel.org/all/20261026-fixes_shmem-v1-5-703206d5fa0c@kernel.org/
+
+Samiullah Khawaja (2):
+  mm/memfd: add F_SEAL_PUNCH_HOLE
+  selftests/memfd: add F_SEAL_PUNCH_HOLE tests
+
+ fs/hugetlbfs/inode.c                       |   3 +-
+ include/uapi/linux/fcntl.h                 |   1 +
+ mm/memfd.c                                 |   4 +-
+ mm/shmem.c                                 |   3 +-
+ tools/testing/selftests/memfd/memfd_test.c | 111 ++++++++++++++++++++-
+ 5 files changed, 118 insertions(+), 4 deletions(-)
+
+
+base-commit: 7bf01f16a4d05028fbeff4d90bab40df25142a24
+-- 
+2.56.0.307.g5fe7bd680c-goog
+
