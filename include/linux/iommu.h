@@ -1225,18 +1225,6 @@ static inline void *dev_iommu_priv_get(struct device *dev)
 
 void dev_iommu_priv_set(struct device *dev, void *priv);
 
-/**
- * typedef iommu_dev_iter_fn - Callback for iterating IOMMU attached devices
- * @dev: Attached device
- * @iommu: IOMMU instance
- *
- * Return: 0 on success, or negative error code.
- */
-typedef int (*iommu_dev_iter_fn)(struct device *dev,
-				 struct iommu_device *iommu);
-
-int iommu_for_each_dev(struct iommu_device *iommu, iommu_dev_iter_fn fn);
-
 extern struct mutex iommu_probe_device_lock;
 int iommu_probe_device(struct device *dev);
 

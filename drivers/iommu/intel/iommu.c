@@ -2540,7 +2540,7 @@ void intel_iommu_shutdown(void)
 
 		/* Make sure the IOMMUs are switched off if not preserved. */
 		if (iommu_preserved_state(&iommu->iommu))
-			clear_unpreserved_context_entries(iommu);
+			clear_unpreserved_context_entries(drhd);
 		else
 			iommu_disable_translation(iommu);
 	}
