@@ -5257,6 +5257,34 @@ int __pci_reset_function_locked(struct pci_dev *dev)
 EXPORT_SYMBOL_GPL(__pci_reset_function_locked);
 
 /**
+ * pci_reset_needs_bridge_lock - check whether a reset of @dev may need the
+ * upstream bridge to be locked
+ * @dev: PCI device to check
+ *
+ * A bus reset of @dev is done through its upstream bridge, so the caller must
+ * hold the bridge lock. The other reset methods only access @dev itself.
+ *
+ * Return: true if any of the reset methods enabled for @dev is a bus reset.
+ */
+bool pci_reset_needs_bridge_lock(struct pci_dev *dev)
+{
+	int i, m;
+
+	for (i = 0; i < PCI_NUM_RESET_METHODS; i++) {
+		m = dev->reset_methods[i];
+		if (!m)
+			break;
+
+		if (pci_reset_fn_methods[m].reset_fn == pci_reset_bus_function ||
+		    pci_reset_fn_methods[m].reset_fn == cxl_reset_bus_function)
+			return true;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL_GPL(pci_reset_needs_bridge_lock);
+
+/**
  * pci_init_reset_methods - check whether device can be safely reset
  * and store supported reset mechanisms.
  * @dev: PCI device to check for reset mechanisms
