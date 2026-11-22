@@ -1,7 +1,7 @@
 From c642130c2fde951f33b4022294dc056c66d4f75e Mon Sep 17 00:00:00 2001
 From: Samiullah Khawaja <skhawaja@google.com>
 Date: Tue, 10 Nov 2026 03:16:02 +0000
-Subject: [PATCH v7 00/18] iommu: Add live update state preservation
+Subject: [PATCH v8 00/18] iommu: Add live update state preservation
 
 Hi,
 
@@ -14,20 +14,28 @@ Live Update Orchestrator:
 
 https://lwn.net/Articles/1033364/
 
-This work depends on,
+This series is based on linux-next (next-20261120), which already has
+the PCI base device preservation series and the LUO internal API to get
+incoming/outgoing files.
 
-- VFIO CDEV preservation series (v6):
-  https://lore.kernel.org/all/20261102153656.1431701-1-vipinsh@google.com/
-- PCI base device preservation series (v10):
-  https://lore.kernel.org/all/20261013162529.1928093-1-dmatlack@google.com/
-- Patch adding LUO internal API to get incoming/outgoing files. This
-  patch is needed as this series is rebased on iommu/next.
-  https://lore.kernel.org/all/20260723202912.1467112-1-skhawaja@google.com/
+Patch 01 is taken from the VFIO cdev preservation series. It exports
+the LUO file handler registration functions, which iommufd needs as it
+can be built as a module. It will be dropped from this series once it
+is merged separately.
+
+The dependency on the VFIO cdev preservation series is removed in this
+version. The patch that preserved the iommufd state of a vfio cdev is
+dropped, so this series can be applied and reviewed on its own and
+merged without the VFIO series. Once the VFIO series is ready, an extra
+patch glues it with the iommufd preservation. The extra patches are
+available at the following Github location:
+
+https://github.com/samikhawaja/linux/tree/iommu/phase1-v8-vfio
 
 The kernel tree with all dependencies is uploaded to the following
 Github location:
 
-https://github.com/samikhawaja/linux/tree/iommu/phase1-v7
+https://github.com/samikhawaja/linux/tree/iommu/phase1-v8
 
 The series is targeting IOMMU tree.
 
@@ -98,9 +106,15 @@ During attachment, the DMA ownership of these devices is also claimed.
 
 Tested:
 
-The new iommufd_liveupdate_kexec_test selftest was used to verify the
-preservation logic. It was tested using QEMU with virtual IOMMU (VT-d)
-support with virtio pcie device bound to the vfio-pci driver.
+The iommufd_liveupdate_kexec_test selftest was used to verify the
+preservation logic. Since the vfio cdev preservation is not part of
+this series, the test binds a device to an iommufd using its vfio cdev,
+preserves the iommufd into a live update session and then preserves the
+device using a new iommufd selftest op. So the kernel needs
+CONFIG_IOMMUFD_TEST. It was tested using QEMU with virtual IOMMU (VT-d)
+support, in both legacy and scalable mode, with virtio pcie device bound
+to the vfio-pci driver. The next kernel was also booted with
+intel_iommu=off to verify that VT-d is forced on.
 
 Also Tested on an Intel machine with DSA device bound to vfio-pci
 driver. Note that preservation is refused for devices where ATS is
@@ -114,18 +128,14 @@ Following steps were followed for verification,
   ./iommufd_liveupdate_kexec_test <vfio-cdev-path>
 
 - Trigger Kexec.
-- After reboot, try binding the device to a non-vfio pci driver,
-
-  echo <device bdf> > /sys/bus/pci/drivers/pci-pf-stub/bind
-
-- This should fail with "Device or resource busy".
-- Bind the device with vfio-pci driver and run the test again.
+- After reboot, bind the device with vfio-pci driver and run the test
+  again.
 
   ./iommufd_liveupdate_kexec_test <vfio-cdev-path> -s 2
 
-- Test verifies that neither the iommufd nor the vfio cdev can be
-  retrieved, as the iommufd restore is not supported yet, and that the
-  session cannot be finished.
+- Test verifies that the restored device cannot be bound to a new
+  iommufd, that the iommufd cannot be retrieved, as the iommufd restore
+  is not supported yet, and that the session cannot be finished.
 
 Future and in progress work:
 
@@ -229,6 +239,29 @@ After a live update, the preserved state is restored during boot.
 Looking forward to your feedback on this.
 
 Changelog:
+
+v8:
+  - Rebased on top of linux-next (next-20261120), which has the PCI
+    preservation series and the LUO internal API.
+  - Drop the dependency on the VFIO preservation series by dropping
+    "vfio/pci: Preserve the iommufd state of the vfio cdev".
+  - Add "liveupdate: Export symbols needed by modules" from the VFIO
+    preservation series as patch 01, until it is merged separately.
+  - Reserve the iommu group of a preserved device for live update with
+    iommu_group_reserve_liveupdate(), replacing the device count checks
+    in iommu_preserve_device() and the device scan at probe. The group of
+    a restored device is reserved when the device is added to it.
+  - Force VT-d on if the previous kernel preserved any IOMMU state, even
+    if booted with intel_iommu=off or iommu=off.
+  - Allocate the domain of a restored device with the stage given by the
+    translation type of its preserved RID_PASID entry.
+  - Drop the no-op restored device checks around ATS/PRI in VT-d probe
+    and release.
+  - Unpreserve a preserved device when it is detached from its HWPT.
+  - Update the selftest to preserve the device using a new iommufd
+    selftest op instead of preserving the vfio cdev, and check that the
+    restored device cannot be bound to a new iommufd.
+  - Collect Reviewed-by tags.
 
 v7:
   - Rebased on top of iommu/next (v7.4-rc1), PCI preservation v10 and
@@ -412,6 +445,8 @@ v2:
   - Rename setup_cdev to open_cdev.
   - Define constants (tokens) as u64 to avoid ABI warnings.
 
+v7: https://lore.kernel.org/all/20261110040828.1774343-1-skhawaja@google.com/
+
 v6: https://lore.kernel.org/all/20261025021930.674647-1-skhawaja@google.com/
 
 v5: https://lore.kernel.org/all/20260921004834.2601285-1-skhawaja@google.com/
@@ -428,7 +463,7 @@ rfcv2: https://lore.kernel.org/all/20251202230303.1017519-1-skhawaja@google.com/
 
 rfcv1: https://lore.kernel.org/all/20250928190624.3735830-1-skhawaja@google.com/
 
-Samiullah Khawaja (16):
+Samiullah Khawaja (15):
   iommu: Implement IOMMU Live update FLB callbacks
   iommu/pages: Add APIs to preserve/unpreserve/restore iommu pages
   iommupt: Implement preserve/unpreserve/restore callbacks
@@ -443,50 +478,50 @@ Samiullah Khawaja (16):
   iommu: Restore and reattach preserved domains to devices
   iommu/vt-d: Handle reattach of the restored domain
   iommufd: Add APIs to preserve/unpreserve a vfio cdev
-  vfio/pci: Preserve the iommufd state of the vfio cdev
   iommufd/selftest: Add test to verify iommufd preservation
+
+Vipin Sharma (1):
+  liveupdate: Export symbols needed by modules
 
 YiFei Zhu (2):
   iommufd: Implement ioctl to mark HWPT for preservation
   iommufd: Persist iommu hardware pagetables for live update
 
- MAINTAINERS                                   |  19 +
- drivers/iommu/Kconfig                         |  12 +
- drivers/iommu/Makefile                        |   1 +
- drivers/iommu/generic_pt/iommu_pt.h           | 155 ++++
- drivers/iommu/generic_pt/kunit_iommu_pt.h     |  30 +
- drivers/iommu/intel/Makefile                  |   1 +
- drivers/iommu/intel/iommu.c                   | 142 ++-
- drivers/iommu/intel/iommu.h                   |  46 +
- drivers/iommu/intel/liveupdate.c              | 826 ++++++++++++++++++
- drivers/iommu/intel/pasid.c                   |  10 +-
- drivers/iommu/intel/pasid.h                   |   8 +
- drivers/iommu/iommu-pages.c                   | 109 ++-
- drivers/iommu/iommu-pages.h                   |  30 +
- drivers/iommu/iommu-priv.h                    |   2 +
- drivers/iommu/iommu.c                         | 145 ++-
- drivers/iommu/iommufd/Makefile                |   1 +
- drivers/iommu/iommufd/device.c                | 153 ++++
- drivers/iommu/iommufd/io_pagetable.c          |  24 +
- drivers/iommu/iommufd/iommufd_private.h       |  36 +
- drivers/iommu/iommufd/liveupdate.c            | 419 +++++++++
- drivers/iommu/iommufd/main.c                  |  19 +-
- drivers/iommu/liveupdate.c                    | 745 ++++++++++++++++
- drivers/vfio/device_cdev.c                    |  10 +
- drivers/vfio/pci/Kconfig                      |  13 +-
- drivers/vfio/pci/vfio_pci_liveupdate.c        | 129 ++-
- drivers/vfio/pci/vfio_pci_priv.h              |  12 +-
- include/linux/generic_pt/iommu.h              |  30 +
- include/linux/iommu-liveupdate.h              | 224 +++++
- include/linux/iommu.h                         |  26 +
- include/linux/iommufd.h                       |  33 +
- include/linux/kho/abi/iommu.h                 | 234 +++++
- include/linux/kho/abi/iommufd.h               |  56 ++
- include/linux/kho/abi/vfio_pci.h              |  15 +-
- include/uapi/linux/iommufd.h                  |  31 +
- tools/testing/selftests/iommu/Makefile        |  12 +
- .../iommu/iommufd_liveupdate_kexec_test.c     | 252 ++++++
- 36 files changed, 3912 insertions(+), 98 deletions(-)
+ MAINTAINERS                                       |  19 +
+ drivers/iommu/Kconfig                             |  12 +
+ drivers/iommu/Makefile                            |   1 +
+ drivers/iommu/generic_pt/iommu_pt.h               | 155 ++++
+ drivers/iommu/generic_pt/kunit_iommu_pt.h         |  30 +
+ drivers/iommu/intel/Makefile                      |   1 +
+ drivers/iommu/intel/iommu.c                       | 174 +++-
+ drivers/iommu/intel/iommu.h                       |  52 ++
+ drivers/iommu/intel/liveupdate.c                  | 855 ++++++++++++++++++++
+ drivers/iommu/intel/pasid.c                       |  10 +-
+ drivers/iommu/intel/pasid.h                       |   8 +
+ drivers/iommu/iommu-pages.c                       | 109 ++-
+ drivers/iommu/iommu-pages.h                       |  30 +
+ drivers/iommu/iommu-priv.h                        |   3 +
+ drivers/iommu/iommu.c                             | 186 ++++-
+ drivers/iommu/iommufd/Makefile                    |   1 +
+ drivers/iommu/iommufd/device.c                    | 175 ++++
+ drivers/iommu/iommufd/io_pagetable.c              |  24 +
+ drivers/iommu/iommufd/iommufd_private.h           |  39 +
+ drivers/iommu/iommufd/iommufd_test.h              |   1 +
+ drivers/iommu/iommufd/liveupdate.c                | 448 ++++++++++
+ drivers/iommu/iommufd/main.c                      |  19 +-
+ drivers/iommu/iommufd/selftest.c                  |  30 +
+ drivers/iommu/liveupdate.c                        | 739 +++++++++++++++++
+ include/linux/generic_pt/iommu.h                  |  30 +
+ include/linux/iommu-liveupdate.h                  | 224 +++++
+ include/linux/iommu.h                             |  26 +
+ include/linux/iommufd.h                           |  33 +
+ include/linux/kho/abi/iommu.h                     | 234 ++++++
+ include/linux/kho/abi/iommufd.h                   |  56 ++
+ include/uapi/linux/iommufd.h                      |  31 +
+ kernel/liveupdate/luo_file.c                      |   2 +
+ tools/testing/selftests/iommu/Makefile            |  12 +
+ .../iommu/iommufd_liveupdate_kexec_test.c         | 282 +++++++
+ 34 files changed, 3997 insertions(+), 54 deletions(-)
  create mode 100644 drivers/iommu/intel/liveupdate.c
  create mode 100644 drivers/iommu/iommufd/liveupdate.c
  create mode 100644 drivers/iommu/liveupdate.c
@@ -496,7 +531,7 @@ YiFei Zhu (2):
  create mode 100644 tools/testing/selftests/iommu/iommufd_liveupdate_kexec_test.c
 
 
-base-commit: 2cf4be57b301ed2d7af82e70cff5dfd96894d8de
+base-commit: 909ef7a9a30fa139e69e555e3606680f5cca7726
 -- 
 2.56.0.506.g506a7eabc5-goog
 
